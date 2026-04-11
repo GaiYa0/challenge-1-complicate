@@ -1,0 +1,165 @@
+"""
+应用配置：pydantic-settings + 环境变量 + .env.dev / .env.prod
+"""
+
+import logging
+import os
+import warnings
+from functools import lru_cache
+from pathlib import Path
+from urllib.parse import quote_plus
+
+from pydantic import Field
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+_log = logging.getLogger(__name__)
+
+
+def _env_file_candidates() -> tuple[str, ...]:
+    """按 APP_ENV（默认 dev）加载 .env.dev / .env.prod，并回退 .env。"""
+    env = os.getenv("APP_ENV", "dev").strip().lower() or "dev"
+    return (f".env.{env}", ".env")
+
+
+class Settings(BaseSettings):
+    """全部从环境变量 / env 文件读取；未提供时使用本地开发默认值。"""
+
+    model_config = SettingsConfigDict(
+        env_file=_env_file_candidates(),
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
+
+    # App
+    APP_NAME: str = "challenge_demo"
+    DEBUG: bool = False
+
+    # Database
+    DB_HOST: str = "localhost"
+    DB_PORT: int = 5432
+    DB_USER: str = "user"
+    DB_PASSWORD: str = "password"
+    DB_NAME: str = "dbname"
+
+    # Redis
+    REDIS_HOST: str = "localhost"
+    REDIS_PORT: int = 6379
+
+    # MinIO
+    MINIO_ENDPOINT: str = "localhost:9000"
+    MINIO_ACCESS_KEY: str = "minioadmin"
+    MINIO_SECRET_KEY: str = "minioadmin"
+    MINIO_SECURE: bool = Field(default=False, description="生产环境应设为 true 以启用 TLS")
+
+    # JWT
+    JWT_SECRET: str = "change-me-in-production"
+    JWT_EXPIRE_MINUTES: int = 60
+
+    # Celery
+    CELERY_BROKER_URL: str = Field(
+        default="",
+        description="为空则启动时用 redis://REDIS_HOST:REDIS_PORT/0",
+    )
+    CELERY_RESULT_BACKEND: str = Field(default="")
+
+    # Neo4j（图谱 / analyze:graph 依赖；与 DB 等一并走 env 文件）
+    NEO4J_URI: str = "bolt://localhost:7687"
+    NEO4J_USER: str = "neo4j"
+    NEO4J_PASSWORD: str = "dev032500"
+
+    # Kafka / Redpanda（事件驱动；KAFKA_ENABLED=false 时不连接）
+    KAFKA_ENABLED: bool = False
+    KAFKA_BOOTSTRAP_SERVERS: str = "localhost:19092"
+    KAFKA_CLIENT_ID: str = "challenge_demo"
+    KAFKA_CONSUMER_GROUP: str = "challenge-demo-pipeline"
+    KAFKA_AUTO_ACTIVATE_MODEL: bool = Field(
+        default=False,
+        description="model-trained 消费者是否自动将新版本设为 active（生产慎用）",
+    )
+    KAFKA_CONSUMER_MAX_RETRIES: int = 3
+    KAFKA_CONSUMER_RETRY_BASE_SEC: float = 1.0
+    KAFKA_UPLOAD_FALLBACK_CELERY: bool = Field(
+        default=True,
+        description="KAFKA_ENABLED=false 时，上传后是否直接 Celery 投递清洗（无 Kafka 的本地开发）",
+    )
+
+    # 生产降级：压力过大时关闭非核心能力（如图谱）
+    DEGRADED: bool = Field(default=False, description="true 时对部分路由返回 503 降级")
+    DEGRADE_GRAPH: bool = Field(default=True, description="DEGRADED=true 时是否禁用 /graph")
+
+    # 生命周期 / 成本
+    LIFECYCLE_DELETE_WARM_AFTER_COLD: bool = Field(
+        default=False,
+        description="冷迁移后是否删除标准桶对象（省存储；生产需确认可再从冷还原）",
+    )
+    LIFECYCLE_COLD_ARCHIVE_BATCH: int = Field(default=30, ge=1, le=500)
+    COST_METRICS_ENABLED: bool = Field(default=True, description="是否异步写入 cost_metrics 表")
+
+    # Celery 调度 / 隔离
+    CELERY_MAX_CONCURRENT_PER_USER: int = Field(
+        default=8,
+        ge=1,
+        le=64,
+        description="单用户可同时执行的业务任务数上限（worker 侧槽位）",
+    )
+    CELERY_TASK_MAX_RETRIES: int = Field(
+        default=5,
+        ge=0,
+        le=20,
+        description="带 QuotaTrackedTask 的默认可重试次数上界（任务装饰器可覆盖）",
+    )
+
+    @property
+    def database_url(self) -> str:
+        return (
+            f"postgresql://{quote_plus(self.DB_USER)}:{quote_plus(self.DB_PASSWORD)}"
+            f"@{self.DB_HOST}:{self.DB_PORT}/{self.DB_NAME}"
+        )
+
+    @property
+    def celery_broker(self) -> str:
+        return self.CELERY_BROKER_URL or f"redis://{self.REDIS_HOST}:{self.REDIS_PORT}/0"
+
+    @property
+    def celery_backend(self) -> str:
+        return self.CELERY_RESULT_BACKEND or f"redis://{self.REDIS_HOST}:{self.REDIS_PORT}/0"
+
+
+_WEAK_DEFAULTS = {
+    "JWT_SECRET": "change-me-in-production",
+    "DB_PASSWORD": "password",
+    "NEO4J_PASSWORD": "dev032500",
+    "MINIO_ACCESS_KEY": "minioadmin",
+    "MINIO_SECRET_KEY": "minioadmin",
+}
+
+
+def _warn_weak_defaults(s: Settings) -> None:
+    """非 DEBUG 模式下，检测到弱默认值时发出警告。"""
+    if s.DEBUG:
+        return
+    for attr, weak in _WEAK_DEFAULTS.items():
+        if getattr(s, attr, None) == weak:
+            msg = f"SECURITY: {attr} is using the default weak value — override via env before production"
+            _log.warning(msg)
+            warnings.warn(msg, stacklevel=3)
+
+
+@lru_cache
+def get_settings() -> Settings:
+    """进程内单例配置（测试可用 get_settings.cache_clear()）。"""
+    s = Settings()
+    _warn_weak_defaults(s)
+    return s
+
+
+# --- 与路径/缓存相关的固定项（保持调用方 import 不变）---
+UPLOAD_DIR = Path("uploads")
+MODEL_SAVE_PATH = Path("models") / "model.pkl"
+CACHE_TTL_TEST = 60
+CACHE_TTL_ANALYZE = 120
+
+# --- 上传与安全 ---
+MAX_UPLOAD_BYTES = 10 * 1024 * 1024
+ALLOWED_UPLOAD_EXTENSIONS = (".csv", ".json")
+RATE_LIMIT_REQUESTS_PER_MINUTE = 100

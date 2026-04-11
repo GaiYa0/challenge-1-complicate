@@ -1,0 +1,56 @@
+/* ── 企业级主题变量（与 Element Plus 主色对齐，可在业务 scoped 中引用） ── */
+:root {
+  --app-primary: #2563eb;
+  --app-primary-light: #eff6ff;
+  --app-bg-layout: #f0f2f5;
+  --app-bg-card: #ffffff;
+  --app-border: #e4e7ed;
+  --app-text: #303133;
+  --app-text-secondary: #909399;
+  --app-radius: 8px;
+  --app-shadow-card: 0 1px 4px rgba(0, 21, 41, 0.08);
+  --app-shadow-hover: 0 8px 24px rgba(0, 21, 41, 0.1);
+  --app-header-h: 56px;
+  --app-aside-w: 220px;
+
+  /* 与 Element Plus 主色同步，保证按钮/菜单高亮一致 */
+  --el-color-primary: var(--app-primary);
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family: 'Helvetica Neue', Helvetica, 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei',
+    Arial, sans-serif;
+  color: var(--app-text);
+  background: var(--app-bg-layout);
+  -webkit-font-smoothing: antialiased;
+}
+
+#app {
+  width: 100%;
+  min-height: 100vh;
+  margin: 0;
+  text-align: left;
+}
+
+/* 路由页切换：轻量淡入，避免闪屏 */
+.fade-slide-enter-active,
+.fade-slide-leave-active {
+  transition: opacity 0.22s ease, transform 0.22s ease;
+}
+
+.fade-slide-enter-from {
+  opacity: 0;
+  transform: translateY(6px);
+}
+
+.fade-slide-leave-to {
+  opacity: 0;
+  transform: translateY(-4px);
+}

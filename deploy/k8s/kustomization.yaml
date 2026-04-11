@@ -1,0 +1,38 @@
+# kubectl apply -k deploy/k8s/
+# 注意：先创建 Secret（postgres-secret, minio-secret, backend-secret, neo4j-secret, grafana-secret）
+# 可使用 backend-secret.example.yaml / postgres-secret.example.yaml / minio-secret.example.yaml 为模板
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: challenge-demo
+resources:
+  - 00-namespace.yaml
+  # secrets (example files — 部署前用真实凭据替换)
+  - postgres-secret.example.yaml
+  - minio-secret.example.yaml
+  - backend-secret.example.yaml
+  # data stores
+  - postgres-deployment.yaml
+  - postgres-service.yaml
+  - postgres-backup-cronjob.yaml
+  - redis-deployment.yaml
+  - redis-service.yaml
+  - minio-deployment.yaml
+  - minio-service.yaml
+  - zookeeper-deployment.yaml
+  - kafka-deployment.yaml
+  - neo4j-deployment.yaml
+  # application
+  - backend-deployment.yaml
+  - backend-service.yaml
+  - backend-hpa.yaml
+  - backend-pdb.yaml
+  - ingress.yaml
+  # monitoring
+  - monitoring/prometheus-config.yaml
+  - monitoring/prometheus-deployment.yaml
+  - monitoring/grafana-deployment.yaml
+
+images:
+  - name: ghcr.io/REPLACE_ORG/challenge-demo
+    newName: ghcr.io/REPLACE_ORG/challenge-demo
+    newTag: latest

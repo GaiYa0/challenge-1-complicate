@@ -1,0 +1,45 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.egg-info/
+dist/
+build/
+*.egg
+
+# Environments
+.venv/
+venv/
+env/
+
+# Sensitive files — only .env.dev / .env.prod (templates) are committed
+.env
+.env.local
+*.secret.yaml
+
+# IDE
+.cursor/
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Testing
+.pytest_cache/
+.mypy_cache/
+htmlcov/
+.coverage
+
+# Node (frontend)
+node_modules/
+frontend/dist/
+
+# Docker volumes (local)
+pgdata/
+
+# Local architecture notes (do not publish)
+summary.txt
