@@ -1,14 +1,12 @@
 # CI/CD：构建镜像 → 漏洞扫描 → 推送 GHCR → 滚动更新 K8s Deployment
 # 需在仓库 Secrets 配置：KUBE_CONFIG（base64 编码的 kubeconfig）
+# GHCR 镜像路径必须全小写，故对 github.repository_owner 做 tr 转换
 name: k8s-ci-cd
 
 on:
   push:
     branches: [main, master]
   workflow_dispatch:
-
-env:
-  IMAGE_TAG: ghcr.io/${{ github.repository_owner }}/challenge-demo
 
 permissions:
   contents: read
@@ -23,9 +21,15 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: GHCR 镜像基路径（owner 转小写，满足 Docker 仓库名规范）
+        id: image
+        run: |
+          o=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
+          echo "tag=ghcr.io/${o}/challenge-demo" >> "$GITHUB_OUTPUT"
+
       - name: Set image metadata
         id: meta
-        run: echo "sha_tag=${{ env.IMAGE_TAG }}:${{ github.sha }}" >> "$GITHUB_OUTPUT"
+        run: echo "sha_tag=${{ steps.image.outputs.tag }}:${{ github.sha }}" >> "$GITHUB_OUTPUT"
 
       - name: Login GHCR
         uses: docker/login-action@v3
@@ -41,12 +45,12 @@ jobs:
           file: Dockerfile
           push: true
           tags: |
-            ${{ env.IMAGE_TAG }}:${{ github.sha }}
+            ${{ steps.meta.outputs.sha_tag }}
 
       - name: Scan image for vulnerabilities
         uses: aquasecurity/trivy-action@master
         with:
-          image-ref: ${{ env.IMAGE_TAG }}:${{ github.sha }}
+          image-ref: ${{ steps.meta.outputs.sha_tag }}
           format: table
           exit-code: 1
           severity: CRITICAL,HIGH
@@ -66,6 +70,7 @@ jobs:
       - name: Deploy to Kubernetes
         env:
           KUBE_CONFIG_B64: ${{ secrets.KUBE_CONFIG }}
+          IMAGE_REF: ${{ needs.build-and-push.outputs.image_sha }}
         run: |
           if [ -z "$KUBE_CONFIG_B64" ]; then
             echo "::error::KUBE_CONFIG secret 未配置，无法部署"
@@ -81,7 +86,7 @@ jobs:
           }
 
           kubectl set image deployment/backend \
-            backend=${{ env.IMAGE_TAG }}:${{ github.sha }} \
+            backend="${IMAGE_REF}" \
             -n challenge-demo
 
           kubectl rollout status deployment/backend \
