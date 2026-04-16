@@ -1,0 +1,16 @@
+# 仅前端 Nginx（8080 → /api、/ws 反代 backend）
+# 须与 backend 栈共用同一 project 与网络，请与 backend 文件合并使用，见根目录 docker-compose.yml
+
+services:
+  web:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: challenge-web
+    networks: [app-net]
+    restart: unless-stopped
+    depends_on:
+      backend:
+        condition: service_healthy
+    ports:
+      - "8080:80"

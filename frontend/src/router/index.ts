@@ -1,9 +1,6 @@
 import { createRouter, createWebHistory } from 'vue-router'
 import type { RouteRecordRaw } from 'vue-router'
 
-/**
- * 路由表集中管理；meta.roles 与 userStore.userInfo.role 对齐做 RBAC。
- */
 const routes: RouteRecordRaw[] = [
   {
     path: '/login',
@@ -12,23 +9,47 @@ const routes: RouteRecordRaw[] = [
   },
   {
     path: '/',
-    component: () => import('../layouts/MainLayout.vue'),
-    redirect: '/dashboard',
+    component: () => import('../layouts/InvestigationLayout.vue'),
+    redirect: '/cases',
     children: [
       {
-        path: 'dashboard',
-        name: 'Dashboard',
-        meta: { title: '工作台' },
-        component: () => import('../pages/Dashboard.vue'),
+        path: 'cases',
+        name: 'CaseList',
+        meta: { title: '案件管理' },
+        component: () => import('../pages/CaseList.vue'),
       },
       {
-        path: 'analysis',
-        name: 'Analysis',
-        meta: { title: '数据分析' },
-        component: () => import('../pages/Analysis.vue'),
+        path: 'cases/:caseId/import',
+        name: 'DataImport',
+        meta: { title: '数据导入' },
+        component: () => import('../pages/DataImport.vue'),
       },
       {
-        path: 'users',
+        path: 'cases/:caseId/analyze',
+        name: 'StartAnalysis',
+        meta: { title: '开始分析' },
+        component: () => import('../pages/StartAnalysis.vue'),
+      },
+      {
+        path: 'cases/:caseId/network',
+        name: 'RelationshipNetwork',
+        meta: { title: '关系网络' },
+        component: () => import('../pages/RelationshipNetwork.vue'),
+      },
+      {
+        path: 'cases/:caseId/risk',
+        name: 'RiskProfile',
+        meta: { title: '风险画像' },
+        component: () => import('../pages/RiskProfile.vue'),
+      },
+      {
+        path: 'cases/:caseId/report',
+        name: 'InvestigationReport',
+        meta: { title: '调查报告' },
+        component: () => import('../pages/InvestigationReport.vue'),
+      },
+      {
+        path: 'admin/users',
         name: 'UserAdmin',
         meta: { title: '用户管理', roles: ['admin'] },
         component: () => import('../pages/Users.vue'),

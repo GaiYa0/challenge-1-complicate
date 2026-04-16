@@ -19,7 +19,7 @@ from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from backend.api import analyze, auth, feature, feedback, file, graph, health, model, realtime_ws, task
+from backend.api import analyze, auth, case, feature, feedback, file, graph, health, model, realtime_ws, task
 from backend.core.config import get_settings
 from backend.core.database import Base
 from backend.core.exceptions import AppError, RateLimitError
@@ -99,14 +99,23 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(lifespan=lifespan)
 
-# 本地 Vite（5173）跨域调 API；生产请保持 DEBUG=false，勿依赖此项
-if get_settings().DEBUG:
+# 本地 Vite（5173）跨域；生产在 DEBUG=false 时通过 CORS_ORIGINS 配置（逗号分隔）
+_settings = get_settings()
+if _settings.DEBUG:
     app.add_middleware(
         CORSMiddleware,
         allow_origins=[
             "http://localhost:5173",
             "http://127.0.0.1:5173",
         ],
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+elif _settings.cors_origins_list:
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=_settings.cors_origins_list,
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
@@ -297,6 +306,7 @@ async def degraded_mode_middleware(request: Request, call_next):
 # ── 路由注册 ─────────────────────────────────────────
 
 app.include_router(auth.router)
+app.include_router(case.router)
 app.include_router(realtime_ws.router)
 app.include_router(health.router)
 app.include_router(file.router)

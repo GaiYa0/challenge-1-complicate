@@ -33,6 +33,8 @@
 docker compose --env-file .env.dev up -d --build
 ```
 
+**前后端分两次启动**（先依赖与 API，再 Nginx）：见 `docker-compose.backend.yml` 与 `docker-compose.frontend.yml`，命令示例见 `run/README.md`。
+
 首次构建可能较慢。全部服务健康后：
 
 - **站点（推荐，前后端同域）**：<http://127.0.0.1:8080> — 由 `web` 服务提供 Vue 构建产物，并将 `/api`、`/ws` 反向代理到后端  

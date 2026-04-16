@@ -19,7 +19,11 @@ export type RealtimeWsOptions = {
   maxReconnectAttempts?: number
 }
 
-/** 由 HTTP API 根地址推导默认 ws://…/ws（支持同源相对路径如 `/api`） */
+/**
+ * 由 HTTP API 根地址推导默认 WebSocket URL。
+ * - 开发环境常见 `VITE_API_BASE_URL=/api`：HTTP 走 Vite 代理 `/api`，WS 仍走同源 `/ws`（与 vite proxy 一致）。
+ * - 绝对地址且带路径（如 `https://host/app/v1`）：在路径后追加 `/ws`，避免子路径部署时丢失前缀。
+ */
 export function resolveDefaultWsUrl(): string {
   const base = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000'
   let httpBase: string
@@ -34,7 +38,11 @@ export function resolveDefaultWsUrl(): string {
   }
   const u = new URL(httpBase)
   u.protocol = u.protocol === 'https:' ? 'wss:' : 'ws:'
-  u.pathname = '/ws'
+  let path = u.pathname.replace(/\/$/, '') || ''
+  if (path === '/api') {
+    path = ''
+  }
+  u.pathname = path ? `${path}/ws` : '/ws'
   u.search = ''
   u.hash = ''
   return u.toString()

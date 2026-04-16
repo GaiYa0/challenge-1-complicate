@@ -20,3 +20,12 @@ class UserProfile(BaseModel):
     name: str
     role: str = Field(description="admin / user 等，与 JWT 内 role 一致")
     tenant_id: str = Field(default="default", description="租户 ID，请求头 X-Tenant-ID 携带")
+
+
+class UserListItem(BaseModel):
+    """管理员用户列表。"""
+
+    id: int
+    username: str
+    role: str
+    created_at: str | None = None

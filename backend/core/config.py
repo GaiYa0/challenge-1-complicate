@@ -33,6 +33,10 @@ class Settings(BaseSettings):
     # App
     APP_NAME: str = "challenge_demo"
     DEBUG: bool = False
+    CORS_ORIGINS: str = Field(
+        default="",
+        description="逗号分隔的前端 Origin；非 DEBUG 且非空时启用 CORS（生产跨域）",
+    )
 
     # Database
     DB_HOST: str = "localhost"
@@ -123,6 +127,12 @@ class Settings(BaseSettings):
     @property
     def celery_backend(self) -> str:
         return self.CELERY_RESULT_BACKEND or f"redis://{self.REDIS_HOST}:{self.REDIS_PORT}/0"
+
+    @property
+    def cors_origins_list(self) -> list[str]:
+        if not self.CORS_ORIGINS.strip():
+            return []
+        return [x.strip() for x in self.CORS_ORIGINS.split(",") if x.strip()]
 
 
 _WEAK_DEFAULTS = {

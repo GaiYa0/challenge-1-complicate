@@ -72,16 +72,31 @@ function mountGraph() {
       data: { nodes, edges },
       layout: {
         type: 'force',
-        linkDistance: 80,
-        nodeStrength: -200,
-        edgeStrength: 0.6,
+        // 防重叠需与节点实际尺寸一致；略放大以给中文标签留出碰撞边界
+        preventOverlap: true,
+        nodeSize: 52,
+        nodeSpacing: 24,
+        linkDistance: 160,
+        nodeStrength: -420,
+        edgeStrength: 0.45,
+        collideStrength: 0.85,
+        alphaDecay: 0.02,
       },
       node: {
         style: (data: NodeData) => {
           const raw = data.data as { label?: string } | undefined
+          const text = raw?.label != null ? String(raw.label) : String(data.id ?? '')
           return {
             size: 36,
-            labelText: raw?.label != null ? String(raw.label) : String(data.id ?? ''),
+            labelText: text,
+            labelPlacement: 'bottom',
+            labelOffsetY: 6,
+            labelFontSize: 12,
+            labelFill: '#1f2937',
+            labelBackground: true,
+            labelBackgroundFill: 'rgba(255,255,255,0.92)',
+            labelPadding: [2, 6, 2, 6],
+            labelLineHeight: 16,
           }
         },
       },

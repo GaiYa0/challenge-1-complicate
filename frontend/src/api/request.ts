@@ -24,12 +24,15 @@ function isApiEnvelope(v: unknown): v is ApiEnvelope {
 
 const http = axios.create({
   baseURL: import.meta.env.VITE_API_BASE_URL,
-  timeout: 15_000,
+  timeout: 30_000,
   headers: { 'Content-Type': 'application/json' },
 })
 
 http.interceptors.request.use(
   (config: InternalAxiosRequestConfig) => {
+    if (config.data instanceof FormData) {
+      delete config.headers?.['Content-Type']
+    }
     const token = localStorage.getItem(TOKEN_STORAGE_KEY)
     if (token) {
       config.headers = config.headers ?? {}

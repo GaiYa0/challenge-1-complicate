@@ -16,7 +16,7 @@ export function setupRouterGuard(router: Router) {
     const hasToken = !!userStore.token
 
     if (to.name === 'Login') {
-      if (hasToken) return { path: '/dashboard' }
+      if (hasToken) return { path: '/cases' }
       return true
     }
 
@@ -38,8 +38,8 @@ export function setupRouterGuard(router: Router) {
     if (need?.length) {
       const role = userStore.userInfo?.role
       if (!role || !need.includes(role)) {
-        notifyWarning('无权访问该页面，已返回工作台')
-        return { path: '/dashboard' }
+        notifyWarning('无权访问该页面')
+        return { path: '/cases' }
       }
     }
 

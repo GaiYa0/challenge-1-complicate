@@ -1,12 +1,25 @@
 <script setup lang="ts">
 import type { FormInstance, FormRules } from 'element-plus'
 import { reactive, ref } from 'vue'
-import { useRouter } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { useUserStore } from '../store/user'
 import { notifyError, notifySuccess } from '../utils/notify'
 
 const userStore = useUserStore()
 const router = useRouter()
+const route = useRoute()
+
+function safeRedirectPath(): string {
+  const r = route.query.redirect
+  if (typeof r !== 'string' || !r.startsWith('/') || r.startsWith('//')) {
+    return '/cases'
+  }
+  const pathOnly = r.split(/[?#]/)[0] ?? ''
+  if (pathOnly === '/login' || pathOnly === '') {
+    return '/cases'
+  }
+  return r
+}
 
 const formRef = ref<FormInstance>()
 const submitting = ref(false)
@@ -38,7 +51,7 @@ async function handleLogin() {
   try {
     await userStore.login({ username: form.username.trim(), password: form.password })
     notifySuccess('登录成功')
-    await router.push('/dashboard')
+    await router.push(safeRedirectPath())
   } catch (e) {
     notifyError(e instanceof Error ? e.message : '登录失败')
   } finally {
@@ -51,10 +64,9 @@ async function handleLogin() {
   <div class="login-page">
     <el-card class="login-card" shadow="hover">
       <template #header>
-        <span class="login-title">登录</span>
-        <span class="login-sub">数据分析平台</span>
+        <span class="login-title">检察调查辅助系统</span>
+        <span class="login-sub">检察机关专用</span>
       </template>
-      <p class="login-tip">使用测试账号 <code>admin / admin</code>（需后端已创建用户）</p>
       <el-form ref="formRef" :model="form" :rules="rules" label-position="top" class="login-form">
         <el-form-item label="用户名" prop="username">
           <el-input v-model="form.username" autocomplete="username" clearable />
@@ -85,20 +97,20 @@ async function handleLogin() {
   align-items: center;
   justify-content: center;
   padding: 24px;
-  background: linear-gradient(160deg, var(--app-primary-light) 0%, var(--app-bg-layout) 45%);
+  background: linear-gradient(160deg, #1a365d 0%, #e8edf4 60%, var(--app-bg-layout) 100%);
 }
 
 .login-card {
   width: 100%;
-  max-width: 400px;
+  max-width: 420px;
   border-radius: var(--app-radius);
   border-color: var(--app-border);
 }
 
 .login-title {
-  font-weight: 600;
-  font-size: 18px;
-  color: var(--app-text);
+  font-weight: 700;
+  font-size: 22px;
+  color: var(--app-primary);
 }
 
 .login-sub {

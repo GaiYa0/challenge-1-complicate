@@ -1,19 +1,21 @@
-/* ── 企业级主题变量（与 Element Plus 主色对齐，可在业务 scoped 中引用） ── */
+/* ── 检察调查辅助系统 — 政务风格主题 ── */
 :root {
-  --app-primary: #2563eb;
-  --app-primary-light: #eff6ff;
-  --app-bg-layout: #f0f2f5;
+  --app-primary: #1a365d;
+  --app-primary-light: #e8edf4;
+  --app-bg-layout: #f5f6fa;
   --app-bg-card: #ffffff;
-  --app-border: #e4e7ed;
-  --app-text: #303133;
-  --app-text-secondary: #909399;
+  --app-border: #dcdfe6;
+  --app-text: #1f2937;
+  --app-text-secondary: #6b7280;
   --app-radius: 8px;
   --app-shadow-card: 0 1px 4px rgba(0, 21, 41, 0.08);
   --app-shadow-hover: 0 8px 24px rgba(0, 21, 41, 0.1);
   --app-header-h: 56px;
-  --app-aside-w: 220px;
+  --app-aside-w: 240px;
+  --app-danger: #dc2626;
+  --app-success: #16a34a;
+  --app-warning: #d97706;
 
-  /* 与 Element Plus 主色同步，保证按钮/菜单高亮一致 */
   --el-color-primary: var(--app-primary);
 }
 
