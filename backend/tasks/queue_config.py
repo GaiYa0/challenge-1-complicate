@@ -36,5 +36,6 @@ CELERY_TASK_ROUTES: dict[str, dict[str, str]] = {
     "tasks.lifecycle_demote_hot_to_warm": {"queue": QUEUE_LOW},
     "tasks.lifecycle_archive_warm_to_cold": {"queue": QUEUE_LOW},
     "tasks.spark_placeholder_submit": {"queue": QUEUE_LOW},
+    "tasks.report_generate_task": {"queue": QUEUE_LOW},
     "tasks.compensation_record": {"queue": QUEUE_COMPENSATION},
 }

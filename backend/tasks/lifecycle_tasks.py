@@ -10,8 +10,8 @@ from datetime import datetime, timedelta, timezone
 
 from backend.core.config import get_settings
 from backend.infra.redis_client import lifecycle_hot_meta_key
-from backend.repository import file_repo
-from backend.service import lifecycle_service
+from backend.app.repositories import file_repo
+from backend.app.services import lifecycle_service
 from backend.tasks import runtime
 from backend.tasks.celery_app import celery_app
 

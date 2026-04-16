@@ -10,7 +10,7 @@ import time
 from backend.core.config import get_settings
 from backend.events.schemas import EventEnvelope, parse_envelope
 from backend.events.topics import DATA_PROCESSED, DATA_UPLOADED, MODEL_TRAINED, PREDICTION_DONE
-from backend.service import ml_model_service
+from backend.app.services import ml_model_service
 from backend.tasks import runtime
 from backend.tasks.celery_app import celery_app
 from backend.tasks.clean_task import clean_data_task

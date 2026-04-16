@@ -74,3 +74,4 @@ from backend.tasks import lifecycle_tasks  # noqa: E402, F401
 from backend.tasks import model_tasks  # noqa: E402, F401
 from backend.tasks import spark_placeholder  # noqa: E402, F401
 import backend.tasks.monitoring_signals  # noqa: E402, F401  # 注册信号
+from backend.tasks import report_export_task  # noqa: E402, F401

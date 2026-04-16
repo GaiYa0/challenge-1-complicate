@@ -13,7 +13,7 @@ from sqlalchemy.orm import Session
 
 from backend.infra import minio_client as mc
 from backend.model.models import File, User
-from backend.service import feature_service
+from backend.app.services import feature_service
 
 
 def read_lake_bytes(client: Minio, row: File) -> bytes:

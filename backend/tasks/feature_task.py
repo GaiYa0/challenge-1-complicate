@@ -6,9 +6,9 @@ from __future__ import annotations
 
 import logging
 
-from backend.repository import file_repo
-from backend.service.feature_service import run_feature_generation
-from backend.service import data_pipeline_service
+from backend.app.repositories import file_repo
+from backend.app.services.feature_service import run_feature_generation
+from backend.app.services import data_pipeline_service
 from backend.tasks.celery_app import celery_app
 from backend.tasks import runtime
 from backend.tasks.task_base import QuotaTrackedTask

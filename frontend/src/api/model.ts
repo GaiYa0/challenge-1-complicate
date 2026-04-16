@@ -81,11 +81,12 @@ export function trainModelAsync(params: TrainQuery) {
   }) as Promise<CeleryTaskSubmitData>
 }
 
-/** GET /model/predict/{filename} */
-export function predictSync(filename: string, model_name = 'default') {
+/** GET /model/predict/{filename}；`silent` 时由调用方自行处理错误，不弹全局提示 */
+export function predictSync(filename: string, model_name = 'default', silent = true) {
   return http.get(`/model/predict/${encodeURIComponent(filename)}`, {
     params: { model_name },
     timeout: 60_000,
+    silentError: silent,
   }) as Promise<ModelPredictData>
 }
 

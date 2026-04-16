@@ -49,6 +49,6 @@ export interface GraphVisualizationData {
 }
 
 /** 分析页：Neo4j User-[:TRANSFER]->User 子图（G6） */
-export function getAnalysisGraph(edgeLimit = 500): Promise<GraphVisualizationData> {
+export function getAnalysisGraph(edgeLimit = 100): Promise<GraphVisualizationData> {
   return http.get('/analysis/graph', { params: { edge_limit: edgeLimit } }) as Promise<GraphVisualizationData>
 }

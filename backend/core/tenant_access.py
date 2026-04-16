@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 
 from backend.core.exceptions import ServiceError
 from backend.model.models import File, User
-from backend.repository import file_repo
+from backend.app.repositories import file_repo
 
 
 def is_admin(user: User) -> bool:

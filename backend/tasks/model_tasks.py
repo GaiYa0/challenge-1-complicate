@@ -6,8 +6,8 @@ from __future__ import annotations
 
 import logging
 
-from backend.repository import feedback_repo, user_repo
-from backend.service.ml_model_service import train_model
+from backend.app.repositories import feedback_repo, user_repo
+from backend.app.services.ml_model_service import train_model
 from backend.tasks.celery_app import celery_app
 from backend.tasks import runtime
 from backend.tasks.task_base import QuotaTrackedTask
@@ -109,7 +109,7 @@ def model_predict_task(
             return {"code": 1, "msg": "user not found", "data": None}
         mio = runtime.minio_client()
         rds = runtime.redis_client()
-        from backend.service import ml_model_service
+        from backend.app.services import ml_model_service
 
         pdata = ml_model_service.predict(db, mio, rds, filename, user, model_name=model_name)
         return {"code": 0, "msg": "ok", "data": pdata.model_dump(mode="json")}

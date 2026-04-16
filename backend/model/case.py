@@ -1,4 +1,4 @@
-from sqlalchemy import Column, DateTime, Index, Integer, String, Text
+from sqlalchemy import Column, DateTime, Index, Integer, JSON, String, Text
 from sqlalchemy.sql import func
 
 from backend.core.database import Base
@@ -19,5 +19,7 @@ class Case(Base):
     case_number = Column(String(128), nullable=True)
     note = Column(Text, nullable=True)
     status = Column(String(32), nullable=False, server_default="active")
+    # 扩展字段：标签、外部系统 ID、业务配置等（JSON）
+    extra_metadata = Column(JSON, nullable=True)
     created_at = Column(DateTime, nullable=False, server_default=func.now())
     updated_at = Column(DateTime, nullable=False, server_default=func.now(), onupdate=func.now())

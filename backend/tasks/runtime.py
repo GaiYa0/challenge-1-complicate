@@ -13,7 +13,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from backend.core.config import get_settings
 from backend.infra import minio_client as minio_ops
-from backend.repository import file_repo
+from backend.app.repositories import file_repo
 
 logger = logging.getLogger("celery.worker")
 

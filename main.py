@@ -1,7 +1,7 @@
 """
-Docker / 本地统一入口：uvicorn main:app（应用定义在 backend.main）。
+Docker / 本地统一入口：uvicorn main:app（应用定义在 backend.app.main）。
 """
 
-from backend.main import app
+from backend.app.main import app
 
 __all__ = ["app"]

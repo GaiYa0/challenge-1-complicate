@@ -6,6 +6,7 @@ export interface CaseOut {
   case_number: string | null
   note: string | null
   status: string
+  extra_metadata?: Record<string, unknown> | null
   created_at: string
   updated_at: string
 }
@@ -23,8 +24,19 @@ export interface CaseUpdate {
   status?: 'active' | 'completed'
 }
 
-export function listCases() {
-  return request.get<CaseOut[]>('/case')
+export interface CasePaged {
+  items: CaseOut[]
+  total: number
+  page: number
+  page_size: number
+}
+
+export function listCases(params?: { page?: number; page_size?: number; scope?: string }) {
+  return request.get('/case', { params }) as Promise<CasePaged>
+}
+
+export function createDemoCase() {
+  return request.post<CaseOut>('/case/demo')
 }
 
 export function createCase(body: CaseCreate) {

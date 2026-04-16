@@ -12,8 +12,8 @@ from backend.core.config import get_settings
 from backend.core.transaction import transaction
 from backend.infra import minio_client as minio_ops
 from backend.model.enums import DataLayer
-from backend.repository import file_repo
-from backend.service import data_pipeline_service
+from backend.app.repositories import file_repo
+from backend.app.services import data_pipeline_service
 from backend.tasks.celery_app import celery_app
 from backend.tasks import runtime
 from backend.tasks.feature_task import feature_extract_task
@@ -42,6 +42,20 @@ def clean_data_task(self, filename: str, user_id: int) -> dict:
     try:
         if not runtime.file_belongs_to_user(filename, user_id):
             return {"code": 1, "msg": "file not found", "data": None}
+
+        # 防指数级派生：已清洗文件（`clean_*`）直接幂等返回，
+        # 避免前端误传回流水线导致 `clean_<hash>_clean_<hash>_...` 膨胀。
+        if filename.startswith("clean_"):
+            logger.info("clean_data_task skip already-cleaned filename=%s", filename)
+            return {
+                "code": 0,
+                "msg": "already cleaned (skipped)",
+                "data": {
+                    "output_filename": filename,
+                    "skipped": True,
+                    "pipeline": {},
+                },
+            }
 
         mio = runtime.minio_client()
         db = runtime.open_session()

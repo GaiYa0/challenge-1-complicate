@@ -13,11 +13,28 @@ from sqlalchemy.orm import Session
 
 
 def get_db(request: Request) -> Generator[Session, None, None]:
-    """每个请求独立 Session，结束时关闭。"""
+    """
+    每个请求独立 Session：
+    - 路由正常返回时统一提交（repo 层只 flush，提交权在请求边界）
+    - 路由异常时回滚
+    - 无论成败都关闭会话
+    """
     SessionLocal = request.app.state.SessionLocal
     db = SessionLocal()
     try:
         yield db
+        try:
+            if db.in_transaction():
+                db.commit()
+        except Exception:
+            db.rollback()
+            raise
+    except Exception:
+        try:
+            db.rollback()
+        except Exception:
+            pass
+        raise
     finally:
         db.close()
 

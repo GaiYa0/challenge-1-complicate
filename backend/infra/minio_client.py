@@ -16,6 +16,7 @@ BUCKET_RAW = "raw-data"
 BUCKET_PROCESSED = "processed-data"
 BUCKET_MODELS = "models"
 BUCKET_COLD = "cold-data"
+BUCKET_REPORTS = "reports"
 
 
 def bucket_for_layer(layer: str) -> str:
@@ -29,7 +30,7 @@ def bucket_for_layer(layer: str) -> str:
 
 
 def ensure_buckets(client: Minio) -> None:
-    for name in (BUCKET_RAW, BUCKET_PROCESSED, BUCKET_MODELS, BUCKET_COLD):
+    for name in (BUCKET_RAW, BUCKET_PROCESSED, BUCKET_MODELS, BUCKET_COLD, BUCKET_REPORTS):
         if not client.bucket_exists(name):
             client.make_bucket(name)
 

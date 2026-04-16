@@ -32,6 +32,11 @@ const menuItems = computed<MenuItem[]>(() => {
       { path: `/cases/${cid}/import`, title: '数据导入', icon: '&#128228;' },
       { path: `/cases/${cid}/analyze`, title: '开始分析', icon: '&#128270;' },
       { path: `/cases/${cid}/network`, title: '关系网络', icon: '&#128279;' },
+      {
+        path: `/cases/${cid}/persons/${encodeURIComponent('张伟')}/portrait`,
+        title: '人物画像',
+        icon: '&#128483;',
+      },
       { path: `/cases/${cid}/risk`, title: '风险画像', icon: '&#128100;' },
       { path: `/cases/${cid}/report`, title: '调查报告', icon: '&#128196;' },
     )

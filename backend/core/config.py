@@ -91,6 +91,24 @@ class Settings(BaseSettings):
     DEGRADED: bool = Field(default=False, description="true 时对部分路由返回 503 降级")
     DEGRADE_GRAPH: bool = Field(default=True, description="DEGRADED=true 时是否禁用 /graph")
 
+    # 演示 / 性能：无 Neo4j 时仍可展示关系页；图谱 Redis 缓存
+    DEMO_MODE: bool = Field(
+        default=False,
+        description="true 时 /analysis/graph 与 /analysis/degree 返回内置 mock，跳过 Neo4j",
+    )
+    GRAPH_VIZ_CACHE_TTL_SEC: int = Field(
+        default=45,
+        ge=5,
+        le=3600,
+        description="Redis 中分析页关系图 / 出度缓存 TTL（秒）",
+    )
+    GRAPH_NODE_CAP: int = Field(
+        default=100,
+        ge=10,
+        le=500,
+        description="分析页关系图最多展示的节点数（边查询后再裁剪）",
+    )
+
     # 生命周期 / 成本
     LIFECYCLE_DELETE_WARM_AFTER_COLD: bool = Field(
         default=False,
@@ -98,6 +116,11 @@ class Settings(BaseSettings):
     )
     LIFECYCLE_COLD_ARCHIVE_BATCH: int = Field(default=30, ge=1, le=500)
     COST_METRICS_ENABLED: bool = Field(default=True, description="是否异步写入 cost_metrics 表")
+
+    COMPLIANCE_EXPORT_APPROVAL_REQUIRED: bool = Field(
+        default=True,
+        description="非 admin 用户生成报告是否必须关联已审批的 export_request",
+    )
 
     # Celery 调度 / 隔离
     CELERY_MAX_CONCURRENT_PER_USER: int = Field(
@@ -111,6 +134,45 @@ class Settings(BaseSettings):
         ge=0,
         le=20,
         description="带 QuotaTrackedTask 的默认可重试次数上界（任务装饰器可覆盖）",
+    )
+
+    # 限流
+    RATE_LIMIT_REQUESTS_PER_MINUTE: int = Field(
+        default=600,
+        ge=30,
+        le=100000,
+        description="单用户每分钟全局请求数上限（GET 轮询/ID-幂等路径可豁免）",
+    )
+    RATE_LIMIT_BURST_BUCKET_SEC: int = Field(
+        default=10,
+        ge=2,
+        le=60,
+        description="突发窗口长度（秒）；同时限制短时峰值",
+    )
+    RATE_LIMIT_BURST_PER_BUCKET: int = Field(
+        default=120,
+        ge=10,
+        le=10000,
+        description="突发窗口内的请求数上限（防止轮询风暴）",
+    )
+    RATE_LIMIT_EXEMPT_PREFIXES: str = Field(
+        default="/task/,/auth/me,/live,/ready,/metrics",
+        description="逗号分隔；以此为前缀（或完全匹配 /auth/me 等）的路径豁免全局限流",
+    )
+
+    # 反向代理 / 请求 ID 安全
+    TRUSTED_PROXY_IPS: str = Field(
+        default="127.0.0.1/32,::1/128,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16",
+        description="逗号分隔 CIDR；仅来自这些对端的 X-Forwarded-For / X-Request-ID 被采信",
+    )
+    REQUEST_ID_MAX_LEN: int = Field(default=128, ge=16, le=256)
+
+    # 报告保留
+    REPORT_RETENTION_DAYS: int = Field(
+        default=30,
+        ge=1,
+        le=365,
+        description="MinIO reports 桶按 last_modified 清理的保留天数",
     )
 
     @property
@@ -133,6 +195,13 @@ class Settings(BaseSettings):
         if not self.CORS_ORIGINS.strip():
             return []
         return [x.strip() for x in self.CORS_ORIGINS.split(",") if x.strip()]
+
+    @property
+    def rate_limit_exempt_prefixes(self) -> tuple[str, ...]:
+        raw = (self.RATE_LIMIT_EXEMPT_PREFIXES or "").strip()
+        if not raw:
+            return tuple()
+        return tuple(x.strip() for x in raw.split(",") if x.strip())
 
 
 _WEAK_DEFAULTS = {
@@ -172,4 +241,6 @@ CACHE_TTL_ANALYZE = 120
 # --- 上传与安全 ---
 MAX_UPLOAD_BYTES = 10 * 1024 * 1024
 ALLOWED_UPLOAD_EXTENSIONS = (".csv", ".json")
-RATE_LIMIT_REQUESTS_PER_MINUTE = 100
+
+# 保留模块级常量以兼容既有 import；真实值取自 Settings 动态读。
+RATE_LIMIT_REQUESTS_PER_MINUTE = 600
