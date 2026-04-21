@@ -38,9 +38,11 @@ from backend.core.config import get_settings
 from backend.app.services import storage_service
 
 
-def file_owner_user_id_if_accessible(db: Session, filename: str, user: User) -> int | None:
+def file_owner_user_id_if_accessible(
+    db: Session, filename: str, user: User, *, dataset: str | None = None,
+) -> int | None:
     try:
-        return int(resolve_file_for_read(db, user, filename).user_id)
+        return int(resolve_file_for_read(db, user, filename, dataset=dataset).user_id)
     except ServiceError:
         return None
 
@@ -51,8 +53,24 @@ def _cache_partition_user_id(db: Session, filename: str, user: User) -> int:
 
 
 def read_csv_as_dataframe(db: Session, minio: Minio, filename: str, user: User) -> pd.DataFrame:
-    """供分析 / 特征 / 模型等 Service 复用。"""
+    """供分析 / 特征 / 模型等 Service 复用（支持 CSV / XLS / XLSX）。"""
     return _load_csv_df(db, minio, filename, user, redis=None)
+
+
+_EXCEL_EXTS = (".xls", ".xlsx")
+
+
+def read_tabular_bytes_to_dataframe(filename: str, raw: bytes) -> pd.DataFrame:
+    """
+    按扩展名从字节加载表格（与 _load_csv_df 规则一致），供构图等仅持有 bytes 的场景复用。
+    """
+    lower = filename.lower()
+    if lower.endswith(".csv"):
+        return pd.read_csv(BytesIO(raw))
+    if lower.endswith(".xls") or lower.endswith(".xlsx"):
+        engine = "xlrd" if lower.endswith(".xls") else "openpyxl"
+        return pd.read_excel(BytesIO(raw), engine=engine, sheet_name=0)
+    raise ServiceError("仅支持 CSV / XLS / XLSX 格式")
 
 
 def _load_csv_df(
@@ -64,12 +82,13 @@ def _load_csv_df(
     redis: Redis | None,
 ) -> pd.DataFrame:
     resolve_file_for_read(db, user, filename)
-    if not filename.lower().endswith(".csv"):
-        raise ServiceError("only csv allowed for this operation")
+    lower = filename.lower()
+    if not (lower.endswith(".csv") or lower.endswith(".xls") or lower.endswith(".xlsx")):
+        raise ServiceError("仅支持 CSV / XLS / XLSX 格式")
     t0 = time.perf_counter()
     try:
         raw = storage_service.read_file_bytes(db, minio, filename, user, redis=redis)
-        return pd.read_csv(BytesIO(raw))
+        return read_tabular_bytes_to_dataframe(filename, raw)
     finally:
         add_db_time_ms((time.perf_counter() - t0) * 1000.0)
 
@@ -182,10 +201,11 @@ def delete_file_by_id(db: Session, minio: Minio, redis: Redis, file_id: int, use
 def delete_file_by_name(db: Session, minio: Minio, redis: Redis, filename: str, user: User) -> None:
     if is_admin(user):
         rows = file_repo.list_files_by_filename_all_tenants(db, filename)
+        own = [r for r in rows if r.user_id == user.id]
+        if own:
+            rows = own
         if not rows:
             raise ServiceError("file not found")
-        if len(rows) > 1:
-            raise ServiceError("ambiguous filename for admin; use file id")
         rec = rows[0]
         try:
             with transaction(db):

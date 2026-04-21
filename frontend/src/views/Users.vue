@@ -1,4 +1,5 @@
 <script setup lang="ts">
+defineOptions({ name: 'UserAdmin' })
 import { ElMessageBox } from 'element-plus'
 import { onMounted } from 'vue'
 import { storeToRefs } from 'pinia'

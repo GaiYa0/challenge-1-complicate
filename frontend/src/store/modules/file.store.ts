@@ -43,15 +43,25 @@ export const useFileStore = defineStore('file', () => {
   const loading = ref(false)
   const uploading = ref(false)
   const lastError = ref<string | null>(null)
+  const activeDataset = ref<string | null>(null)
 
-  async function fetchList(): Promise<FileSummaryItem[]> {
+  /**
+   * @param dataset - 按 dataset 过滤（如 `case-123`），null 表示不过滤
+   */
+  async function fetchList(dataset?: string | null): Promise<FileSummaryItem[]> {
+    if (dataset !== undefined) activeDataset.value = dataset ?? null
     loading.value = true
     lastError.value = null
     try {
       const rows = (await listDbFiles()) ?? []
-      items.value = Array.isArray(rows)
+      let normalized = Array.isArray(rows)
         ? rows.map(normalizeItem).filter((i) => i.filename.length > 0)
         : []
+      if (activeDataset.value) {
+        const ds = activeDataset.value
+        normalized = normalized.filter((i) => i.dataset === ds)
+      }
+      items.value = normalized
       return items.value
     } catch (e) {
       items.value = []
@@ -109,6 +119,7 @@ export const useFileStore = defineStore('file', () => {
     loading,
     uploading,
     lastError,
+    activeDataset,
     fetchList,
     upload,
     remove,

@@ -10,12 +10,28 @@ export interface PortraitBasicInfo {
   summary: string
 }
 
+export interface PortraitFundTxRow {
+  amount: number
+}
+
+export interface PortraitFundLine {
+  counterparty: string
+  amount: number
+  tx_count: number
+  /** 可选逐笔明细（后端有上限） */
+  rows?: PortraitFundTxRow[]
+}
+
 export interface PortraitEconomic {
   total_amount: number
   anomaly_ratio: number
   transfer_out_count: number
   transfer_in_count: number
   explain: string
+  /** 本案仅财付通表格 */
+  fund_only_evidence?: boolean
+  /** 按对手侧合并后的真实金额行 */
+  fund_counterparty_lines?: PortraitFundLine[]
 }
 
 export interface TimelineBin {

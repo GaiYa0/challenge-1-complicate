@@ -25,12 +25,6 @@ from backend.app.schemas.analysis_viz import (
 )
 
 
-def _stable_amount(s: str, t: str) -> float:
-    h = hashlib.sha256(f"{s}|{t}".encode()).hexdigest()
-    v = int(h[:8], 16) % 490_000
-    return float(10_000 + v)
-
-
 def _stable_ts(base: datetime, s: str, t: str, idx: int) -> str:
     h = int(hashlib.md5(f"{s}|{t}|{idx}".encode()).hexdigest()[:6], 16)
     delta = timedelta(hours=(h % (24 * 30)), minutes=(h % 120))
@@ -46,8 +40,9 @@ def get_fund_viz_data(
     tid = int(tenant_id)
     lim = max(1, min(int(edge_limit or 0), 5000))
     cypher = (
-        "MATCH (a:User {tenant_id: $tid})-[:TRANSFER]->(b:User {tenant_id: $tid}) "
-        "RETURN a.name AS s, b.name AS t LIMIT $lim"
+        "MATCH (a:User {tenant_id: $tid})-[r:TRANSFER]->(b:User {tenant_id: $tid}) "
+        "RETURN a.name AS s, b.name AS t, sum(coalesce(r.amount, 1.0)) AS amt "
+        "LIMIT $lim"
     )
     base = datetime.now(timezone.utc) - timedelta(days=30)
 
@@ -69,7 +64,7 @@ def get_fund_viz_data(
             seen.add(pair)
             nodes[s] = s
             nodes[t] = t
-            amt = _stable_amount(s, t)
+            amt = float(r["amt"] or 0.0)
             ts = _stable_ts(base, s, t, idx)
             fund_events.append(
                 FundTimelineEvent(

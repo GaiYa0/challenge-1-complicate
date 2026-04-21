@@ -41,6 +41,8 @@ export interface GraphVisualizationEdge {
   id: string
   source: string
   target: string
+  /** 表格构图边权：金额合计或笔数（与后端 case 边一致） */
+  weight?: number
 }
 
 export interface GraphVisualizationData {
@@ -48,7 +50,20 @@ export interface GraphVisualizationData {
   edges: GraphVisualizationEdge[]
 }
 
-/** 分析页：Neo4j User-[:TRANSFER]->User 子图（G6） */
-export function getAnalysisGraph(edgeLimit = 100): Promise<GraphVisualizationData> {
-  return http.get('/analysis/graph', { params: { edge_limit: edgeLimit } }) as Promise<GraphVisualizationData>
+/** 案件分析页：Neo4j User-[:TRANSFER]->User 子图（G6） */
+export function getAnalysisGraph(caseId: number, edgeLimit = 100): Promise<GraphVisualizationData> {
+  return http.get(`/cases/${caseId}/analysis/graph`, { params: { edge_limit: edgeLimit } }) as Promise<GraphVisualizationData>
+}
+
+export interface MergedGraphData {
+  nodes: Record<string, unknown>[]
+  edges: Record<string, unknown>[]
+  case_ids: number[]
+}
+
+/** 跨案件合并图谱 */
+export function getMergedCasesGraph(caseIds: number[], limit = 80): Promise<MergedGraphData> {
+  return http.get('/cases/graph', {
+    params: { case_ids: caseIds.join(','), limit },
+  }) as Promise<MergedGraphData>
 }

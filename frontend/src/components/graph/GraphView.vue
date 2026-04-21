@@ -2,7 +2,6 @@
 import { Graph, GraphEvent, NodeEvent } from '@antv/g6'
 import type { EdgeData, IEvent, IPointerEvent, LayoutOptions, Node as G6Node, NodeData } from '@antv/g6'
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { buildLineGraphData, clipGraphData } from '../../utils/graphSample'
 import { clipGraphVisualization, GRAPH_DISPLAY_MAX_NODES } from '../../utils/graphClip'
 
 export type Neo4jGraphPayload = {
@@ -14,11 +13,15 @@ export type GraphLayoutKind = 'force' | 'dagre' | 'radial'
 
 const LABEL_FONT_SIZE = 12
 const LABEL_LINE_HEIGHT = 16
+const LABEL_MAX_CHARS = 10
+const LABEL_MAX_WIDTH = 140
 const PAD_X = 10
 const MIN_NODE_DIAM = 36
-/** 物理布局用的节点尺寸：在可视直径之外额外预留标签高度 + 两侧缓冲，
- *  避免力导向下圆本身不重叠但标签相互压在一起（3 节点糊成一团的根因）。 */
+const MAX_NODE_DIAM = 64
 const LAYOUT_PADDING = 28
+const PARALLEL_EDGE_GAP = 28
+const HARD_RENDER_CAP = 300
+const SIMPLIFY_THRESHOLD = 100
 
 const props = withDefaults(
   defineProps<{
@@ -27,10 +30,8 @@ const props = withDefaults(
     loading?: boolean
     totalNodes?: number
     initialCap?: number
-    /** Neo4j 模式下单图最多展示节点数（性能） */
     maxNeoNodes?: number
     showHeading?: boolean
-    /** 受控布局；不传则组件内切换 */
     layout?: GraphLayoutKind
   }>(),
   {
@@ -66,8 +67,6 @@ const activeLayout = computed<GraphLayoutKind>({
 })
 
 let hoveredNodeId: string | null = null
-
-/* ───────── 画布 memoization：同签名数据跳过重挂载 ───────── */
 let lastSignature = ''
 
 function stableEdgeSignature(
@@ -90,62 +89,49 @@ function measureLabelWidth(text: string, fontSize = LABEL_FONT_SIZE): number {
   return ctx.measureText(text).width
 }
 
+function truncateLabel(text: string, max = LABEL_MAX_CHARS): string {
+  if (text == null) return ''
+  const s = String(text)
+  if (s.length <= max) return s
+  return s.slice(0, Math.max(1, max - 1)) + '…'
+}
+
 function computeNodeDiameter(label: string): number {
-  const tw = measureLabelWidth(label, LABEL_FONT_SIZE)
-  return Math.max(MIN_NODE_DIAM, Math.ceil(tw + PAD_X * 2))
+  const t = truncateLabel(label)
+  const tw = measureLabelWidth(t, LABEL_FONT_SIZE)
+  const d = Math.ceil(tw + PAD_X * 2)
+  return Math.min(MAX_NODE_DIAM, Math.max(MIN_NODE_DIAM, d))
 }
 
 function layoutSizeFor(label: string): number {
   return computeNodeDiameter(label) + LAYOUT_PADDING
 }
 
-/**
- * 力导向参数按规模分档；小图（≤6）给足远距离 + 强排斥，
- * 避免 3~5 个节点也挤在一团（与标签相互重叠）。
- */
-function forceTierParams(nodeCount: number) {
-  if (nodeCount <= 6) {
-    return {
-      linkDistance: 240,
-      nodeStrength: -1400,
-      collideStrength: 0.98,
-      edgeStrength: 0.35,
-      nodeSpacing: 44,
-    }
-  }
-  if (nodeCount < 15) {
-    return {
-      linkDistance: 210,
-      nodeStrength: -950,
-      collideStrength: 0.95,
-      edgeStrength: 0.42,
-      nodeSpacing: 32,
-    }
-  }
-  if (nodeCount < 30) {
+function forceTierParams(n: number) {
+  if (n < 30) {
     return {
       linkDistance: 180,
-      nodeStrength: -620,
-      collideStrength: 0.9,
-      edgeStrength: 0.48,
+      nodeStrength: -300,
+      collideStrength: 1.0,
+      edgeStrength: 0.5,
       nodeSpacing: 20,
     }
   }
-  if (nodeCount <= 100) {
+  if (n <= 100) {
     return {
-      linkDistance: 210,
-      nodeStrength: -520,
-      collideStrength: 0.9,
-      edgeStrength: 0.42,
-      nodeSpacing: 12,
+      linkDistance: 260,
+      nodeStrength: -500,
+      collideStrength: 1.2,
+      edgeStrength: 0.4,
+      nodeSpacing: 24,
     }
   }
   return {
-    linkDistance: 300,
-    nodeStrength: -680,
-    collideStrength: 0.96,
-    edgeStrength: 0.36,
-    nodeSpacing: 8,
+    linkDistance: 360,
+    nodeStrength: -800,
+    collideStrength: 1.5,
+    edgeStrength: 0.3,
+    nodeSpacing: 28,
   }
 }
 
@@ -174,7 +160,7 @@ function buildForceLayoutOptions(
     nodeStrength: t.nodeStrength,
     edgeStrength: t.edgeStrength,
     collideStrength: t.collideStrength,
-    alphaDecay: 0.025,
+    alphaDecay: 0.022,
     alphaMin: 0.02,
     animation: false,
   }
@@ -184,8 +170,8 @@ function buildDagreLayout(nodeSizeFn: (n: NodeData) => number): LayoutOptions {
   return {
     type: 'dagre',
     rankdir: 'LR',
-    nodesep: 48,
-    ranksep: 72,
+    nodesep: 52,
+    ranksep: 80,
     nodeSize: (node: NodeData) => nodeSizeFn(node),
   }
 }
@@ -203,7 +189,7 @@ function buildRadialLayout(
     preventOverlap: true,
     nodeSize: (node: NodeData) => nodeSizeFn(node),
     nodeSpacing: t.nodeSpacing,
-    maxPreventOverlapIteration: 200,
+    maxPreventOverlapIteration: 240,
     focusNode: focusNodeId ?? undefined,
   }
 }
@@ -220,8 +206,9 @@ function resolveLayout(
 }
 
 function getCanvasSize(el: HTMLDivElement): [number, number] {
-  const w = Math.max(1, Math.floor(el.clientWidth || el.getBoundingClientRect().width))
-  const hRaw = el.clientHeight || el.getBoundingClientRect().height
+  const rect = el.getBoundingClientRect()
+  const w = Math.max(1, Math.floor(el.clientWidth || rect.width))
+  const hRaw = el.clientHeight || rect.height
   const h = Math.max(500, Math.floor(hRaw > 0 ? hRaw : 500))
   return [w, h]
 }
@@ -234,12 +221,66 @@ function bindResize(el: HTMLDivElement) {
     if (w > 0 && h > 0) {
       try {
         graph.resize(w, h)
+        void graph.fitView(undefined, false)
       } catch {
-        /* graph 销毁中途 resize，吞掉即可 */
+        /* noop */
       }
     }
   })
   resizeObserver.observe(el)
+}
+
+function seedInitialPositions(nodes: NodeData[], width: number, height: number): NodeData[] {
+  if (nodes.length === 0) return nodes
+  const cx = width / 2
+  const cy = height / 2
+  const baseR = Math.max(120, Math.min(width, height) * 0.36)
+  const goldenAngle = Math.PI * (3 - Math.sqrt(5))
+  return nodes.map((n, i) => {
+    const angle = i * goldenAngle + Math.random() * 0.8
+    const radius = baseR * Math.sqrt((i + 1) / nodes.length) * (0.7 + Math.random() * 0.55)
+    const x = cx + Math.cos(angle) * radius + (Math.random() - 0.5) * 16
+    const y = cy + Math.sin(angle) * radius + (Math.random() - 0.5) * 16
+    const prev = (n as unknown as { style?: Record<string, unknown> }).style ?? {}
+    return { ...n, style: { ...prev, x, y } } as NodeData
+  })
+}
+
+function annotateParallelEdges(edges: EdgeData[]): EdgeData[] {
+  const counts = new Map<string, number>()
+  const indices = new Map<string, number>()
+  for (const e of edges) {
+    const a = String(e.source)
+    const b = String(e.target)
+    const key = a < b ? `${a}::${b}` : `${b}::${a}`
+    const c = counts.get(key) ?? 0
+    indices.set(String(e.id), c)
+    counts.set(key, c + 1)
+  }
+  return edges.map((e) => {
+    const a = String(e.source)
+    const b = String(e.target)
+    const key = a < b ? `${a}::${b}` : `${b}::${a}`
+    const total = counts.get(key) ?? 1
+    if (total <= 1) {
+      return { ...e, data: { ...(e.data as object | undefined), curveOffset: 0, parallelTotal: 1 } }
+    }
+    const idx = indices.get(String(e.id)) ?? 0
+    const offset = (idx - (total - 1) / 2) * PARALLEL_EDGE_GAP
+    return {
+      ...e,
+      data: { ...(e.data as object | undefined), curveOffset: offset, parallelTotal: total },
+    }
+  })
+}
+
+function hardCap(nodes: NodeData[], edges: EdgeData[]): { nodes: NodeData[]; edges: EdgeData[] } {
+  if (nodes.length <= HARD_RENDER_CAP) return { nodes, edges }
+  const kept = new Set(nodes.slice(0, HARD_RENDER_CAP).map((n) => String(n.id)))
+  return {
+    nodes: nodes.slice(0, HARD_RENDER_CAP),
+    edges: edges.filter((e) => kept.has(String(e.source)) && kept.has(String(e.target))),
+  }
 }
 
 function clearHoverHighlight() {
@@ -343,7 +384,6 @@ async function mountGraph() {
     return
   }
 
-  /* ---- 数据准备 ---- */
   let nodes: NodeData[] = []
   let edges: EdgeData[] = []
   let focusId: string | null = null
@@ -366,17 +406,15 @@ async function mountGraph() {
     edges = d.edges.map((e) => ({ id: e.id, source: e.source, target: e.target }))
     focusId = nodes[0]?.id != null ? String(nodes[0].id) : null
   } else {
-    const rawG = buildLineGraphData(Math.max(2, props.totalNodes))
-    const clipped = clipGraphData(rawG.nodes, rawG.edges, Math.max(2, props.initialCap))
-    nodes = clipped.nodes.map((n) => {
-      const label = String(n.id)
-      return { ...n, data: { ...(n.data as object), label, layoutSize: layoutSizeFor(label) } }
-    })
-    edges = clipped.edges
-    focusId = nodes[0]?.id != null ? String(nodes[0].id) : null
+    destroyGraph()
+    lastSignature = ''
+    return
   }
 
-  /* ---- memoization：同签名跳过重建，直接返回 ---- */
+  const capped = hardCap(nodes, edges)
+  nodes = capped.nodes
+  edges = annotateParallelEdges(capped.edges)
+
   const sig = stableEdgeSignature(
     nodes.map((n) => ({ id: String(n.id), label: (n.data as { label?: string })?.label })),
     edges.map((e) => ({ id: String(e.id), source: String(e.source), target: String(e.target) })),
@@ -392,37 +430,45 @@ async function mountGraph() {
 
   const [width, height] = getCanvasSize(el)
   const nCount = nodes.length
+  const simplify = nCount > SIMPLIFY_THRESHOLD
   const nodeSizeFn = buildNodeSizeFn()
   const layout = resolveLayout(activeLayout.value, nCount, nodeSizeFn, focusId)
 
+  const seededNodes = seedInitialPositions(nodes, width, height)
   const isNeo = props.variant === 'neo4j'
 
   graph = new Graph({
     container: el,
     width,
     height,
-    data: { nodes, edges },
+    autoResize: false,
+    data: { nodes: seededNodes, edges },
     layout,
     node: {
       style: (data: NodeData) => {
         const rawData = data.data as { label?: string } | undefined
         const text = rawData?.label != null ? String(rawData.label) : String(data.id ?? '')
-        const size = computeNodeDiameter(text)
+        const display = truncateLabel(text)
+        const size = simplify ? Math.max(18, MIN_NODE_DIAM - 14) : computeNodeDiameter(text)
         return {
           type: 'circle',
           size,
           fill: isNeo ? '#e0e7ff' : '#f1f5f9',
           stroke: isNeo ? '#6366f1' : '#64748b',
           lineWidth: 1,
-          labelText: text,
+          labelText: simplify ? '' : display,
           labelPlacement: 'bottom',
-          labelOffsetY: 8,
+          labelOffsetY: 10,
           labelFontSize: LABEL_FONT_SIZE,
           labelFill: isNeo ? '#1f2937' : '#334155',
           labelBackground: true,
           labelBackgroundFill: 'rgba(255,255,255,0.94)',
           labelPadding: [2, 6, 2, 6],
           labelLineHeight: LABEL_LINE_HEIGHT,
+          labelWordWrap: true,
+          labelMaxWidth: LABEL_MAX_WIDTH,
+          labelMaxLines: 1,
+          labelTextOverflow: 'ellipsis',
         }
       },
       state: {
@@ -436,8 +482,20 @@ async function mountGraph() {
       },
     },
     edge: {
-      type: 'line',
-      style: { stroke: isNeo ? '#94a3b8' : '#cbd5e1', lineWidth: 1, endArrow: true },
+      type: (data: EdgeData) => {
+        const d = data.data as { curveOffset?: number } | undefined
+        return d?.curveOffset ? 'quadratic' : 'line'
+      },
+      style: (data: EdgeData) => {
+        const d = data.data as { curveOffset?: number } | undefined
+        return {
+          stroke: isNeo ? '#94a3b8' : '#cbd5e1',
+          lineWidth: 1,
+          endArrow: true,
+          curveOffset: d?.curveOffset ?? 0,
+          curvePosition: 0.5,
+        }
+      },
       state: {
         active: { stroke: isNeo ? '#6366f1' : '#2563eb', lineWidth: 2 },
       },
@@ -479,7 +537,6 @@ async function applyLayoutSwitch() {
     graph.setLayout(layout)
     await graph.layout()
     await graph.fitView(undefined, false)
-    // 签名中包含 layout，布局切换后刷新签名以保持 memoization 一致
     lastSignature = ''
   } catch (err) {
     console.warn('[GraphView] layout switch failed', err)
@@ -528,12 +585,7 @@ onBeforeUnmount(() => {
   <div class="graph-wrap">
     <div v-if="showHeading" class="graph-title">关系图（G6 · 专业布局与交互）</div>
     <p v-if="showHeading" class="graph-meta">
-      <template v-if="variant === 'demo'">
-        逻辑节点 {{ totalNodes }}，首屏挂载 {{ Math.min(initialCap, totalNodes) }}。
-      </template>
-      <template v-else>
-        数据来自 <code>/analysis/graph</code>（前端最多展示 {{ maxNeoNodes }} 个节点）。
-      </template>
+      数据来自 Neo4j（前端最多展示 {{ maxNeoNodes }} 个节点）。
     </p>
 
     <div v-if="!showNeo4jEmpty && !loading" class="graph-toolbar">
@@ -592,12 +644,13 @@ onBeforeUnmount(() => {
 .graph-canvas-wrap {
   min-height: 500px;
   position: relative;
+  width: 100%;
 }
 
 .graph-canvas {
   width: 100%;
   min-height: 500px;
-  height: 56vh;
+  height: 62vh;
   border: 1px solid #e5e7eb;
   border-radius: 6px;
   background: #fafafa;

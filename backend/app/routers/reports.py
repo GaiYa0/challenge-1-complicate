@@ -6,13 +6,14 @@ from typing import Annotated
 
 from celery.result import AsyncResult
 from fastapi import APIRouter, Depends, Request
+from minio import Minio
 from neo4j import Driver
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from backend.app.routers.deps import get_current_user
 from backend.core.config import get_settings
-from backend.core.deps import get_db, get_neo4j_driver
+from backend.core.deps import get_db, get_minio, get_neo4j_driver
 from backend.core.exceptions import AppError
 from backend.core.tenant_access import is_admin
 from backend.model.celery_task_run import CeleryTaskRun
@@ -20,7 +21,7 @@ from backend.model.models import User
 from backend.app.repositories import case_repo, export_request_repo
 from backend.app.schemas.common import ApiResponse, success_for_request
 from backend.app.schemas.reports import ReportGenerateIn, ReportTaskQueued, ReportTaskResultOut
-from backend.app.services import audit_service, graph_service
+from backend.app.services import audit_service, case_graph_service, graph_service
 from backend.tasks.celery_app import celery_app
 from backend.tasks.report_export_task import report_generate_task
 
@@ -56,6 +57,7 @@ def generate_report(
     current_user: Annotated[User, Depends(get_current_user)],
     db: Annotated[Session, Depends(get_db)],
     neo4j_driver: Annotated[Driver, Depends(get_neo4j_driver)],
+    minio: Annotated[Minio, Depends(get_minio)],
 ):
     """
     投递异步任务生成报告；使用 GET /reports/tasks/{task_id} 轮询结果。
@@ -85,9 +87,16 @@ def generate_report(
         if er.status != "approved":
             raise AppError("导出申请未通过审批", code=40303, status_code=403)
 
-    if not graph_service.person_name_exists(neo4j_driver, name=body.person_id, tenant_id=tid):
+    pid = (body.person_id or "").strip()
+    case_edges = case_graph_service.load_case_transfer_edges(
+        db, minio, tenant_user_id=tid, case_id=body.case_id
+    )
+    in_case = pid in case_graph_service.node_set_from_edges(case_edges)
+    if not in_case and not graph_service.person_name_exists(
+        neo4j_driver, name=pid, tenant_id=tid
+    ):
         raise AppError(
-            "人物不在图谱中或 person_id 与 Neo4j 不一致",
+            "人物不在图谱中或 person_id 与本案表格构图 / Neo4j 不一致",
             code=40401,
             status_code=404,
         )

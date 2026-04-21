@@ -14,6 +14,8 @@ celery
 kafka-python
 pandas
 numpy
+xlrd>=2.0.1
+openpyxl
 networkx>=3.0
 scikit-learn
 prometheus-client

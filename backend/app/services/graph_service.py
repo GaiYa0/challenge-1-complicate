@@ -45,15 +45,19 @@ def create_edge(
     to_user: str,
     *,
     tenant_id: int,
+    amount: float | None = None,
 ) -> None:
     tid = _require_tid(tenant_id)
+    amt = 1.0 if amount is None else float(amount)
     cypher = (
         "MATCH (a:User {name: $from_name, tenant_id: $tid}), "
         "(b:User {name: $to_name, tenant_id: $tid}) "
-        "CREATE (a)-[:TRANSFER]->(b)"
+        "CREATE (a)-[r:TRANSFER {amount: $amt}]->(b)"
     )
     with driver.session() as session:
-        result = session.run(cypher, from_name=from_user, to_name=to_user, tid=tid)
+        result = session.run(
+            cypher, from_name=from_user, to_name=to_user, tid=tid, amt=amt
+        )
         summary = result.consume()
         if summary.counters.relationships_created == 0:
             raise ServiceError("one or both users not found")
@@ -71,35 +75,6 @@ def list_relations(driver: Driver, *, tenant_id: int) -> list[GraphRelation]:
             GraphRelation(from_user=r["from_name"], to_user=r["to_name"])
             for r in result
         ]
-
-
-def demo_visualization_data() -> GraphVisualizationData:
-    """演示模式：固定小规模链路与少量跨边，节点数 ≤ GRAPH_NODE_CAP。"""
-    cap = max(10, min(get_settings().GRAPH_NODE_CAP, 100))
-    n = min(28, cap)
-    names = [f"演示{nid:02d}" for nid in range(1, n + 1)]
-    nodes = [GraphVisualizationNode(id=x, label=x) for x in names]
-    edges: list[GraphVisualizationEdge] = []
-    ei = 0
-    for i in range(n - 1):
-        edges.append(
-            GraphVisualizationEdge(id=f"e{ei}", source=names[i], target=names[i + 1])
-        )
-        ei += 1
-    if n > 8:
-        edges.append(GraphVisualizationEdge(id=f"e{ei}", source=names[0], target=names[7]))
-        ei += 1
-    if n > 16:
-        edges.append(GraphVisualizationEdge(id=f"e{ei}", source=names[5], target=names[16]))
-    return GraphVisualizationData(nodes=nodes, edges=edges)
-
-
-def demo_out_degree_from_viz(data: GraphVisualizationData) -> list[GraphDegreeItem]:
-    out: dict[str, int] = {}
-    for e in data.edges:
-        out[e.source] = out.get(e.source, 0) + 1
-    ranked = sorted(out.items(), key=lambda x: (-x[1], x[0]))
-    return [GraphDegreeItem(name=k, degree=v) for k, v in ranked]
 
 
 def _clip_graph_by_node_cap(

@@ -1,13 +1,16 @@
 /**
- * 任务轮询（批量 + 退避 + 去抖）。
+ * 任务轮询（批量 + 退避 + 去抖 + 页面不可见时自动暂停）。
  *
  * 设计：
  * - 单次 tick 只发 1 个 POST /task/batch 请求，覆盖所有未完成 id（≤64 个）。
  * - 429 / 网络错误使用指数退避（最大 20s），避免与限流器抖动共振。
  * - 完成 / 失败去重累计，全部终态后立即停止并回调。
  * - 组件卸载时 `onBeforeUnmount` 停止轮询。
+ * - `document.visibilityState === 'hidden'` 期间不再发请求，返回前台后立即恢复；
+ *   避免用户切到后台页签后继续烧 /task/batch 配额。
+ * - `taskIds` 以内容签名监听，避免数组引用不变却内容变化导致的失效漏报。
  */
-import { ref, computed, watch, onBeforeUnmount, type Ref } from 'vue'
+import { ref, computed, watch, onBeforeUnmount, onMounted, type Ref } from 'vue'
 import { getTasksBatch, type TaskBatchItem } from '../api/task'
 
 interface UseTaskPollerOptions {
@@ -40,6 +43,12 @@ export function useTaskPoller(options: UseTaskPollerOptions) {
   let consecutiveErrors = 0
   let stopped = false
   let inFlight = false
+  let paused = false
+
+  function isHidden(): boolean {
+    if (typeof document === 'undefined') return false
+    return document.visibilityState === 'hidden'
+  }
 
   const totalCount = computed(() => taskIds.value.length)
   const completedCount = computed(() => completed.value.size + failed.value.size)
@@ -84,6 +93,11 @@ export function useTaskPoller(options: UseTaskPollerOptions) {
 
   async function pollOnce(): Promise<void> {
     if (stopped || inFlight) return
+    // 页面不可见时挂起；返回前台由 onVisibilityChange 重新调度
+    if (paused || isHidden()) {
+      paused = true
+      return
+    }
     const pending = currentPending()
     if (pending.length === 0) {
       stopInternal()
@@ -118,6 +132,7 @@ export function useTaskPoller(options: UseTaskPollerOptions) {
   function start() {
     if (isPolling.value) return
     stopped = false
+    paused = false
     consecutiveErrors = 0
     completed.value = new Set()
     failed.value = new Set()
@@ -128,6 +143,7 @@ export function useTaskPoller(options: UseTaskPollerOptions) {
 
   function stopInternal() {
     stopped = true
+    paused = false
     isPolling.value = false
     if (timer !== null) {
       clearTimeout(timer)
@@ -139,14 +155,43 @@ export function useTaskPoller(options: UseTaskPollerOptions) {
     stopInternal()
   }
 
-  watch(taskIds, () => {
-    if (isPolling.value) {
-      stopInternal()
-      start()
+  function onVisibilityChange(): void {
+    if (!isPolling.value) return
+    if (isHidden()) {
+      paused = true
+      if (timer !== null) {
+        clearTimeout(timer)
+        timer = null
+      }
+    } else if (paused) {
+      paused = false
+      scheduleNext(0)
+    }
+  }
+
+  // 以内容签名监听 taskIds，避免数组重新创建 / 引用变化但内容相同时重复重启
+  watch(
+    () => taskIds.value.slice().sort().join('|'),
+    () => {
+      if (isPolling.value) {
+        stopInternal()
+        start()
+      }
+    },
+  )
+
+  onMounted(() => {
+    if (typeof document !== 'undefined') {
+      document.addEventListener('visibilitychange', onVisibilityChange)
     }
   })
 
-  onBeforeUnmount(stopInternal)
+  onBeforeUnmount(() => {
+    if (typeof document !== 'undefined') {
+      document.removeEventListener('visibilitychange', onVisibilityChange)
+    }
+    stopInternal()
+  })
 
   return { isPolling, completedCount, totalCount, progress, results, start, stop }
 }

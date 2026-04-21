@@ -84,6 +84,7 @@ def _peer_trusted(request: Request, nets: list) -> bool:
 _ADDITIVE_COLUMN_PATCHES: tuple[tuple[str, str, str], ...] = (
     ("cases", "extra_metadata", "JSONB"),
     ("cases", "status", "VARCHAR(32) NOT NULL DEFAULT 'active'"),
+    ("cases", "is_demo", "BOOLEAN NOT NULL DEFAULT FALSE"),
     ("audit_logs", "case_id", "INTEGER"),
     ("audit_logs", "resource_id", "VARCHAR(128)"),
     ("audit_logs", "ip_address", "VARCHAR(64)"),
@@ -224,12 +225,35 @@ elif _settings.cors_origins_list:
 
 @app.get("/live")
 async def liveness():
-    return {"status": "live"}
+    """进程级探活：只要应用能响应就算活着，不触碰任何外部依赖。"""
+    from backend.app.services.health_probe import check_liveness
+
+    return check_liveness()
 
 
 @app.get("/ready")
 async def readiness():
-    return {"status": "ready"}
+    """
+    业务级就绪：并发探 DB/Redis/MinIO/Neo4j，带 1.5s 超时与 5s 结果缓存。
+    DB 不可达 → 503，其它依赖失联仅在 payload 里呈现，不影响路由入站。
+    """
+    from backend.app.services.health_probe import check_readiness
+
+    payload, is_ready = check_readiness(app)
+    if not is_ready:
+        return JSONResponse(status_code=503, content=payload)
+    return payload
+
+
+@app.get("/ready/deep")
+async def readiness_deep():
+    """强制跳过缓存的深度探活，供运维按需触发。"""
+    from backend.app.services.health_probe import check_readiness
+
+    payload, is_ready = check_readiness(app, force=True)
+    if not is_ready:
+        return JSONResponse(status_code=503, content=payload)
+    return payload
 
 
 @app.get("/metrics")

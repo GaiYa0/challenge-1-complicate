@@ -57,6 +57,7 @@ export const useAnalysisStore = defineStore('analysis', () => {
   const files = ref<string[]>([])
   const filesLoading = ref(false)
   const filesError = ref<string | null>(null)
+  const currentDataset = ref<string | null>(null)
 
   const enqueueing = ref(false)
   const enqueuedTaskIds = ref<string[]>([])
@@ -66,14 +67,22 @@ export const useAnalysisStore = defineStore('analysis', () => {
 
   const hasFiles = computed(() => files.value.length > 0)
 
-  async function fetchFiles(): Promise<string[]> {
+  /**
+   * @param dataset - 按 dataset 过滤（如 `case-123`），null/undefined 不过滤
+   */
+  async function fetchFiles(dataset?: string | null): Promise<string[]> {
     filesLoading.value = true
     filesError.value = null
+    currentDataset.value = dataset ?? null
     try {
       const rows = (await listDbFiles()) as FileDetailItem[]
-      const names = Array.isArray(rows)
-        ? rows.map((r) => r?.filename).filter((s): s is string => typeof s === 'string')
-        : []
+      let filtered = Array.isArray(rows) ? rows : []
+      if (dataset) {
+        filtered = filtered.filter((r) => r?.dataset === dataset)
+      }
+      const names = filtered
+        .map((r) => r?.filename)
+        .filter((s): s is string => typeof s === 'string')
       files.value = names
       return names
     } catch (e) {
@@ -102,7 +111,7 @@ export const useAnalysisStore = defineStore('analysis', () => {
       for (const filename of sources) {
         for (const kind of kinds) {
           try {
-            const res = await enqueueAnalyzeJob(kind, filename)
+            const res = await enqueueAnalyzeJob(kind, filename, currentDataset.value ?? undefined)
             const tid = typeof res?.task_id === 'string' ? res.task_id : ''
             if (tid) ids.push(tid)
           } catch (e) {
@@ -177,6 +186,7 @@ export const useAnalysisStore = defineStore('analysis', () => {
     files.value = []
     filesLoading.value = false
     filesError.value = null
+    currentDataset.value = null
     enqueueing.value = false
     enqueuedTaskIds.value = []
     summary.value = { ...EMPTY_SUMMARY }

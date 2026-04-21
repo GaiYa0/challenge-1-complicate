@@ -1,7 +1,5 @@
 """案件管理路由：CRUD for investigation cases。"""
 
-from datetime import datetime, timezone
-
 from fastapi import APIRouter, Depends, Query, Request
 from sqlalchemy.orm import Session
 
@@ -61,25 +59,6 @@ def list_cases(
     )
 
 
-@router.post("/demo", response_model=ApiResponse[CaseOut])
-def create_demo_case(
-    request: Request,
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
-):
-    """演示：一键生成示例案件（extra_metadata.demo=true），便于路演快速进入流程。"""
-    ts = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M")
-    row = case_repo.create(
-        db,
-        current_user.id,
-        name=f"演示案件 {ts}",
-        case_number=f"DEMO-{ts}",
-        note="一键生成（演示模式）",
-        extra_metadata={"demo": True, "created_via": "POST /case/demo"},
-    )
-    return success_for_request(request, _to_out(row))
-
-
 @router.post("", response_model=ApiResponse[CaseOut])
 def create_case(
     request: Request,
@@ -115,6 +94,30 @@ def get_case(
 
 @router.put("/{case_id}", response_model=ApiResponse[CaseOut])
 def update_case(
+    request: Request,
+    case_id: int,
+    body: CaseUpdate,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    row = case_repo.get_by_id(db, case_id)
+    if row is None:
+        raise AppError("案件不存在", code=40401, status_code=404)
+    if not is_admin(current_user) and row.user_id != current_user.id:
+        raise AppError("案件不存在", code=40401, status_code=404)
+    row = case_repo.update(
+        db,
+        row,
+        name=body.name,
+        case_number=body.case_number,
+        note=body.note,
+        status=body.status,
+    )
+    return success_for_request(request, _to_out(row))
+
+
+@router.patch("/{case_id}", response_model=ApiResponse[CaseOut])
+def patch_case(
     request: Request,
     case_id: int,
     body: CaseUpdate,

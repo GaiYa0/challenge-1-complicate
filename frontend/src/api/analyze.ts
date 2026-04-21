@@ -8,7 +8,8 @@ function encFilename(name: string) {
   return encodeURIComponent(name)
 }
 
-/** POST /analyze/{kind}/{filename} */
-export function enqueueAnalyzeJob(kind: AnalyzeJobKind, filename: string) {
-  return http.post(`/analyze/${kind}/${encFilename(filename)}`) as Promise<TaskEnqueueData>
+/** POST /analyze/{kind}/{filename}?dataset=... */
+export function enqueueAnalyzeJob(kind: AnalyzeJobKind, filename: string, dataset?: string) {
+  const params = dataset ? { dataset } : undefined
+  return http.post(`/analyze/${kind}/${encFilename(filename)}`, undefined, { params }) as Promise<TaskEnqueueData>
 }

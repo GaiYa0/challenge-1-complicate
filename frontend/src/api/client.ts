@@ -8,6 +8,58 @@ import axios, {
   type AxiosRequestConfig,
   type InternalAxiosRequestConfig,
 } from 'axios'
+
+/**
+ * 单例 AbortController 管理器：store 层用 `makeSignal(key)` 发起新请求时，
+ * 会自动 abort 掉同 key 的上一个 controller，天然解决"切页后老响应覆盖新数据"这类竞态。
+ */
+const _abortControllers = new Map<string, AbortController>()
+
+/**
+ * 为同一业务键获取 AbortSignal，上一个 controller 会先被 abort。
+ *
+ * ```ts
+ * const signal = makeSignal('graph:load')
+ * await http.get('/analysis/graph', { signal, silentError: true })
+ * ```
+ */
+export function makeSignal(key: string): AbortSignal {
+  const prev = _abortControllers.get(key)
+  if (prev) {
+    try { prev.abort() } catch { /* noop */ }
+  }
+  const ctl = new AbortController()
+  _abortControllers.set(key, ctl)
+  return ctl.signal
+}
+
+/** 手动取消某个 key 的未完成请求（通常在 store reset / onBeforeUnmount 调用）。 */
+export function cancelSignal(key: string): void {
+  const ctl = _abortControllers.get(key)
+  if (ctl) {
+    try { ctl.abort() } catch { /* noop */ }
+    _abortControllers.delete(key)
+  }
+}
+
+/** 批量清理：页面卸载或用户登出时用。 */
+export function cancelAllSignals(): void {
+  for (const ctl of _abortControllers.values()) {
+    try { ctl.abort() } catch { /* noop */ }
+  }
+  _abortControllers.clear()
+}
+
+export function isCanceled(e: unknown): boolean {
+  if (!e || typeof e !== 'object') return false
+  const cast = e as { name?: string; code?: string; message?: string }
+  return (
+    cast.code === 'ERR_CANCELED' ||
+    cast.name === 'CanceledError' ||
+    cast.name === 'AbortError' ||
+    cast.message === 'canceled'
+  )
+}
 import { TENANT_STORAGE_KEY, TOKEN_STORAGE_KEY } from '../constants/auth'
 import { notifyError, notifyWarning } from '../utils/notify'
 import router from '../router'
@@ -103,7 +155,18 @@ http.interceptors.response.use(
       globalHttpContext.setLastRequestId(rid)
     }
 
+    // 取消：静默返回，让业务层通过 isCanceled 过滤即可
+    if (isCanceled(error) || cfg.signal?.aborted) {
+      endLoadingIfNeeded(cfg)
+      return Promise.reject(error)
+    }
+
     if (status === 429 && cfg && cfg._rateLimitRetry !== false) {
+      // 请求已被业务层主动取消就不再重试
+      if (cfg.signal?.aborted) {
+        endLoadingIfNeeded(cfg)
+        return Promise.reject(error)
+      }
       const attempt = Number(cfg._rateLimitRetryCount ?? 0)
       if (attempt < RATE_LIMIT_MAX_RETRIES) {
         const headers = error.response?.headers as Record<string, unknown> | undefined
@@ -114,6 +177,9 @@ http.interceptors.response.use(
         cfg._rateLimitRetryCount = attempt + 1
         endLoadingIfNeeded(cfg)
         await sleep(backoff)
+        if (cfg.signal?.aborted) {
+          return Promise.reject(error)
+        }
         return http.request(cfg)
       }
     }

@@ -3,11 +3,12 @@
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, Request
+from minio import Minio
 from neo4j import Driver
 from sqlalchemy.orm import Session
 
 from backend.app.routers.deps import get_current_user
-from backend.core.deps import get_db, get_neo4j_driver
+from backend.core.deps import get_db, get_minio, get_neo4j_driver
 from backend.core.response import success_for_request
 from backend.model.models import User
 from backend.app.schemas.clue_api import ClueDetailOut, ClueListItem
@@ -16,6 +17,38 @@ from backend.app.schemas.portrait import PersonPortraitOut
 from backend.app.services import audit_service, clue_service, portrait_service
 
 router = APIRouter(tags=["clues"])
+
+
+@router.get(
+    "/cases/{case_id}/clues",
+    response_model=ApiResponse[list[ClueListItem]],
+)
+def list_case_clues(
+    request: Request,
+    case_id: int,
+    current_user: Annotated[User, Depends(get_current_user)],
+    db: Session = Depends(get_db),
+):
+    from backend.app.repositories import case_repo as _case_repo
+    from backend.core.tenant_access import is_admin as _is_admin
+
+    row = _case_repo.get_by_id(db, case_id)
+    if row is None:
+        raise clue_service.AppError("案件不存在", code=42001, status_code=404)
+    if not _is_admin(current_user) and row.user_id != current_user.id:
+        raise clue_service.ForbiddenError("无权访问该案件", code=42002)
+    from backend.app.repositories import clue_repo
+    rows = clue_repo.list_by_case(db, case_id=case_id)
+    data = [
+        {
+            "id": r.id,
+            "title": r.title,
+            "risk_level": r.risk_level.value if hasattr(r.risk_level, "value") else str(r.risk_level),
+            "risk_score": float(r.risk_score),
+        }
+        for r in rows
+    ]
+    return success_for_request(request, [ClueListItem.model_validate(x) for x in data])
 
 
 @router.get(
@@ -29,10 +62,12 @@ def list_person_clues(
     current_user: Annotated[User, Depends(get_current_user)],
     db: Session = Depends(get_db),
     neo4j_driver: Driver = Depends(get_neo4j_driver),
+    minio: Minio = Depends(get_minio),
 ):
     data = clue_service.list_clues_for_person(
         db,
         neo4j_driver,
+        minio,
         user=current_user,
         case_id=case_id,
         person_id=person_id,
@@ -61,6 +96,7 @@ def get_person_portrait(
     current_user: Annotated[User, Depends(get_current_user)],
     db: Session = Depends(get_db),
     neo4j_driver: Driver = Depends(get_neo4j_driver),
+    minio: Minio = Depends(get_minio),
 ):
     """
     人物画像：经济 / 轨迹 / 社会关系子图 / 线索列表（一人一张图）。
@@ -68,6 +104,7 @@ def get_person_portrait(
     data = portrait_service.get_person_portrait(
         db,
         neo4j_driver,
+        minio,
         user=current_user,
         case_id=case_id,
         person_id=person_id,

@@ -239,8 +239,8 @@ CACHE_TTL_TEST = 60
 CACHE_TTL_ANALYZE = 120
 
 # --- 上传与安全 ---
-MAX_UPLOAD_BYTES = 10 * 1024 * 1024
-ALLOWED_UPLOAD_EXTENSIONS = (".csv", ".json")
+MAX_UPLOAD_BYTES = 50 * 1024 * 1024
+ALLOWED_UPLOAD_EXTENSIONS = (".csv", ".json", ".xls", ".xlsx")
 
 # 保留模块级常量以兼容既有 import；真实值取自 Settings 动态读。
 RATE_LIMIT_REQUESTS_PER_MINUTE = 600

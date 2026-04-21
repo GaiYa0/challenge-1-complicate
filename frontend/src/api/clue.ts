@@ -6,6 +6,7 @@ export interface ClueListItem {
   title: string
   risk_level: string
   risk_score: number
+  category?: string
 }
 
 export interface ClueDetail {

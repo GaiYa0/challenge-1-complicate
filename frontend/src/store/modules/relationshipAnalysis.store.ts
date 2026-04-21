@@ -1,5 +1,8 @@
 /**
  * 关系分析闭环：主图 → 人物 → 线索列表 → 同心圆 → 线索详情侧栏。
+ *
+ * 新增：所有 HTTP 请求通过 `makeSignal(key)` 获取 AbortSignal，
+ * 保证"快速切页 / 切线索"时会自动 abort 掉上一次未完成的请求，避免旧响应覆盖新状态。
  */
 import { computed, ref } from 'vue'
 import { defineStore } from 'pinia'
@@ -12,8 +15,14 @@ import {
   fetchPersonClues,
 } from '../../api/relationshipAnalysis'
 import type { GraphOutDegreeRow, GraphVisualizationData } from '../../api/graph'
+import { cancelSignal, isCanceled, makeSignal } from '../../api/client'
 
 export type RelationshipViewMode = 'main' | 'clue'
+
+const SIG_MAIN = 'rel:main'
+const SIG_DEGREE = 'rel:degree'
+const SIG_CLUES = 'rel:clues'
+const SIG_DETAIL = 'rel:detail'
 
 function errText(e: unknown): string {
   return e instanceof Error ? e.message : '请求失败'
@@ -69,13 +78,21 @@ export const useRelationshipAnalysisStore = defineStore('relationshipAnalysis', 
 
   /** 1. 加载主图 + 出度表 */
   async function loadMainGraph() {
+    const cid = caseId.value
+    if (cid == null) return
     graphError.value = null
     mainLoading.value = true
+    const mainSignal = makeSignal(SIG_MAIN)
+    const degreeSignal = makeSignal(SIG_DEGREE)
     try {
-      const [g, d] = await Promise.all([fetchAnalysisGraph(100), fetchGraphOutDegree()])
+      const [g, d] = await Promise.all([
+        fetchAnalysisGraph(cid, 100, { signal: mainSignal }),
+        fetchGraphOutDegree(cid, { signal: degreeSignal }),
+      ])
       graphData.value = g
       degreeList.value = [...d].sort((a, b) => b.degree - a.degree)
     } catch (e) {
+      if (isCanceled(e)) return
       graphError.value = errText(e)
       graphData.value = null
       degreeList.value = []
@@ -95,9 +112,12 @@ export const useRelationshipAnalysisStore = defineStore('relationshipAnalysis', 
     selectedPersonLabel.value = personLabel
     cluesLoading.value = true
     try {
-      personClues.value = await fetchPersonClues(cid, personId)
+      personClues.value = await fetchPersonClues(cid, personId, {
+        signal: makeSignal(SIG_CLUES),
+      })
       mode.value = 'clue'
     } catch (e) {
+      if (isCanceled(e)) return
       cluesError.value = errText(e)
       personClues.value = []
       ElMessage.error(`加载线索失败：${cluesError.value}`)
@@ -114,13 +134,22 @@ export const useRelationshipAnalysisStore = defineStore('relationshipAnalysis', 
     detailError.value = null
     detailLoading.value = true
     try {
-      clueDetail.value = await fetchClueDetail(id)
+      clueDetail.value = await fetchClueDetail(id, { signal: makeSignal(SIG_DETAIL) })
     } catch (e) {
+      if (isCanceled(e)) return
       detailError.value = errText(e)
       clueDetail.value = null
     } finally {
       detailLoading.value = false
     }
+  }
+
+  /** 供路由离开或页面卸载调用，彻底停掉本 store 发起的未完成请求 */
+  function cancelInFlight() {
+    cancelSignal(SIG_MAIN)
+    cancelSignal(SIG_DEGREE)
+    cancelSignal(SIG_CLUES)
+    cancelSignal(SIG_DETAIL)
   }
 
   async function retryClueDetail() {
@@ -158,5 +187,6 @@ export const useRelationshipAnalysisStore = defineStore('relationshipAnalysis', 
     retryClueDetail,
     exitClueView,
     resetClueFlow,
+    cancelInFlight,
   }
 })

@@ -4,7 +4,7 @@ API 层 —— 分析路由（异步）：请求仅投递 Celery，立即返回 
 
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, Query, Request
 from sqlalchemy.orm import Session
 
 from backend.app.routers.deps import get_current_user
@@ -23,8 +23,9 @@ def analyze_mock_job(
     filename: str,
     current_user: Annotated[User, Depends(get_current_user)],
     db: Session = Depends(get_db),
+    dataset: str | None = Query(None),
 ):
-    data = analyze_service.enqueue_analyze_job(db, "mock", filename, current_user)
+    data = analyze_service.enqueue_analyze_job(db, "mock", filename, current_user, dataset=dataset)
     return success_for_request(request, data)
 
 
@@ -34,8 +35,9 @@ def analyze_basic_job(
     filename: str,
     current_user: Annotated[User, Depends(get_current_user)],
     db: Session = Depends(get_db),
+    dataset: str | None = Query(None),
 ):
-    data = analyze_service.enqueue_analyze_job(db, "basic", filename, current_user)
+    data = analyze_service.enqueue_analyze_job(db, "basic", filename, current_user, dataset=dataset)
     return success_for_request(request, data)
 
 
@@ -45,8 +47,9 @@ def analyze_iforest_job(
     filename: str,
     current_user: Annotated[User, Depends(get_current_user)],
     db: Session = Depends(get_db),
+    dataset: str | None = Query(None),
 ):
-    data = analyze_service.enqueue_analyze_job(db, "iforest", filename, current_user)
+    data = analyze_service.enqueue_analyze_job(db, "iforest", filename, current_user, dataset=dataset)
     return success_for_request(request, data)
 
 
@@ -56,8 +59,9 @@ def analyze_graph_job(
     filename: str,
     current_user: Annotated[User, Depends(get_current_user)],
     db: Session = Depends(get_db),
+    dataset: str | None = Query(None),
 ):
-    data = analyze_service.enqueue_analyze_job(db, "graph", filename, current_user)
+    data = analyze_service.enqueue_analyze_job(db, "graph", filename, current_user, dataset=dataset)
     return success_for_request(request, data)
 
 
@@ -67,8 +71,9 @@ def analyze_clean_job(
     filename: str,
     current_user: Annotated[User, Depends(get_current_user)],
     db: Session = Depends(get_db),
+    dataset: str | None = Query(None),
 ):
-    data = task_service.enqueue_clean(db, filename, current_user)
+    data = task_service.enqueue_clean(db, filename, current_user, dataset=dataset)
     return success_for_request(request, data)
 
 
@@ -78,6 +83,7 @@ def analyze_feature_job(
     filename: str,
     current_user: Annotated[User, Depends(get_current_user)],
     db: Session = Depends(get_db),
+    dataset: str | None = Query(None),
 ):
-    data = task_service.enqueue_feature_extract(db, filename, current_user)
+    data = task_service.enqueue_feature_extract(db, filename, current_user, dataset=dataset)
     return success_for_request(request, data)

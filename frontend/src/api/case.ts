@@ -35,10 +35,6 @@ export function listCases(params?: { page?: number; page_size?: number; scope?: 
   return request.get('/case', { params }) as Promise<CasePaged>
 }
 
-export function createDemoCase() {
-  return request.post<CaseOut>('/case/demo')
-}
-
 export function createCase(body: CaseCreate) {
   return request.post<CaseOut>('/case', body)
 }
@@ -48,6 +44,10 @@ export function getCase(id: number) {
 }
 
 export function updateCase(id: number, body: CaseUpdate) {
+  return request.put<CaseOut>(`/case/${id}`, body)
+}
+
+export function patchCase(id: number, body: CaseUpdate) {
   return request.put<CaseOut>(`/case/${id}`, body)
 }
 

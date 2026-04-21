@@ -64,8 +64,8 @@ def _record_task(
         raise ServiceError("failed to record task")
 
 
-def enqueue_analyze(db: Session, filename: str, user: User) -> TaskEnqueueData:
-    owner_id = file_owner_user_id_if_accessible(db, filename, user)
+def enqueue_analyze(db: Session, filename: str, user: User, *, dataset: str | None = None) -> TaskEnqueueData:
+    owner_id = file_owner_user_id_if_accessible(db, filename, user, dataset=dataset)
     if owner_id is None:
         raise ServiceError("file not found")
     result = analyze_data_task.delay("basic", filename, owner_id)
@@ -73,8 +73,8 @@ def enqueue_analyze(db: Session, filename: str, user: User) -> TaskEnqueueData:
     return TaskEnqueueData(task_id=result.id)
 
 
-def enqueue_clean(db: Session, filename: str, user: User) -> TaskEnqueueData:
-    owner_id = file_owner_user_id_if_accessible(db, filename, user)
+def enqueue_clean(db: Session, filename: str, user: User, *, dataset: str | None = None) -> TaskEnqueueData:
+    owner_id = file_owner_user_id_if_accessible(db, filename, user, dataset=dataset)
     if owner_id is None:
         raise ServiceError("file not found")
     result = clean_data_task.delay(filename, owner_id)
@@ -82,8 +82,8 @@ def enqueue_clean(db: Session, filename: str, user: User) -> TaskEnqueueData:
     return TaskEnqueueData(task_id=result.id)
 
 
-def enqueue_feature_extract(db: Session, filename: str, user: User) -> TaskEnqueueData:
-    owner_id = file_owner_user_id_if_accessible(db, filename, user)
+def enqueue_feature_extract(db: Session, filename: str, user: User, *, dataset: str | None = None) -> TaskEnqueueData:
+    owner_id = file_owner_user_id_if_accessible(db, filename, user, dataset=dataset)
     if owner_id is None:
         raise ServiceError("file not found")
     result = feature_extract_task.delay(filename, owner_id)

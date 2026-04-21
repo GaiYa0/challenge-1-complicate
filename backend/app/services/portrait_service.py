@@ -8,6 +8,7 @@ import hashlib
 from datetime import datetime, timezone
 from typing import Any
 
+from minio import Minio
 from neo4j import Driver
 from sqlalchemy.orm import Session
 
@@ -23,10 +24,12 @@ from backend.app.schemas.portrait import (
     PortraitBehavior,
     PortraitClueItem,
     PortraitEconomic,
+    PortraitFundLine,
+    PortraitFundTxRow,
     PortraitSocial,
     TimelineBin,
 )
-from backend.app.services import analysis_viz_service, clue_service, graph_service
+from backend.app.services import analysis_viz_service, case_graph_service, clue_service, graph_service
 
 
 def _ensure_case(db: Session, user: User, case_id: int):
@@ -141,6 +144,7 @@ def _synthetic_behavior(person_id: str) -> tuple[list[MapPoint], dict[str, float
 def get_person_portrait(
     db: Session,
     neo4j: Driver,
+    minio: Minio,
     *,
     user: User,
     case_id: int,
@@ -148,18 +152,74 @@ def get_person_portrait(
 ) -> PersonPortraitOut:
     case_row = _ensure_case(db, user, case_id)
     tid = int(case_row.user_id)
-    if not graph_service.person_name_exists(neo4j, name=person_id, tenant_id=tid):
+    pid = (person_id or "").strip()
+    case_edges = case_graph_service.load_case_transfer_edges(
+        db, minio, tenant_user_id=tid, case_id=case_id
+    )
+    in_case = pid in case_graph_service.node_set_from_edges(case_edges)
+    in_neo = graph_service.person_name_exists(neo4j, name=pid, tenant_id=tid)
+    if not in_case and not in_neo:
         raise AppError(
-            "人物不在图谱中或 person_id 与 Neo4j User.name 不一致",
+            "人物不在图谱中或 person_id 与本案表格构图 / Neo4j User.name 不一致",
             code=40401,
             status_code=404,
         )
 
-    rows = clue_service._seed_mock_if_empty(db, case_id=case_id, person_id=person_id)
+    fund_only_flag = clue_service.case_tabular_is_tenpay_only(
+        db, case_id=case_id, tenant_user_id=tid
+    )
 
-    out_c, in_c = _neo_transfer_counts(neo4j, name=person_id, tenant_id=tid)
+    out_c, in_c = 0, 0
+    tenpay_amount: float | None = None
+    tenpay_rows = 0
+    if in_case:
+        out_c, in_c = case_graph_service.transfer_counts_for_person(pid, case_edges)
+        tenpay_amount, tenpay_rows = (
+            case_graph_service.aggregate_tenpay_amount_and_rows_for_person(
+                db, minio, tenant_user_id=tid, case_id=case_id, person_id=person_id
+            )
+        )
+        fund_lines_raw, fund_tx_rows_map = (
+            case_graph_service.aggregate_tenpay_fund_lines_for_person(
+                db, minio, tenant_user_id=tid, case_id=case_id, person_id=person_id
+            )
+        )
+        soc = case_graph_service.ego_graph_visualization_from_edges(case_edges, pid)
+        if tenpay_amount is not None:
+            econ_explain = (
+                "资金总额来自本案财付通交易明细中金额列（按用户侧账号名称汇总）；"
+                "转出/转入条数来自表格构图；异常比例为高风险线索数占比。"
+            )
+        else:
+            econ_explain = (
+                "转出/转入条数来自本案导入表格（CSV/XLS/XLSX）构图；"
+                "未解析到金额列或无法匹配用户侧时，总交易额为估算值；异常比例为高风险线索数占比。"
+            )
+    else:
+        out_c, in_c = _neo_transfer_counts(neo4j, name=pid, tenant_id=tid)
+        soc = _build_social_subgraph(neo4j, center=pid, tenant_id=tid)
+        econ_explain = (
+            "总交易额由 Neo4j 转出/转入边数结合稳定算法估算；异常比例为高风险线索数占比。"
+        )
+        fund_lines_raw = []
+        fund_tx_rows_map: dict[str, list[float]] = {}
+
+    edge_hint = out_c + in_c
+    mock_hint: int | None = None
+    if tenpay_rows > 0:
+        mock_hint = min(15, max(5, tenpay_rows))
+    elif in_case and edge_hint > 0:
+        mock_hint = min(15, max(5, edge_hint))
+
+    rows = clue_service._seed_mock_if_empty(
+        db, case_id=case_id, person_id=person_id, mock_count_hint=mock_hint
+    )
+
     total_edges = out_c + in_c
-    total_amount = _synthetic_amount(person_id, max(1, total_edges))
+    if in_case and tenpay_amount is not None:
+        total_amount = float(tenpay_amount)
+    else:
+        total_amount = _synthetic_amount(person_id, max(1, total_edges))
     if rows:
         high = sum(1 for r in rows if _cat(r.risk_level) == "high")
         anomaly_ratio = min(1.0, high / max(1, len(rows)))
@@ -201,7 +261,6 @@ def get_person_portrait(
         timeline_bins = _hour_bins_from_points(map_points)
         beh_explain = "当前无与本人物 ID 完全匹配的定位点，以下为基于人物标识生成的可解释占位轨迹，接入真实数据后将自动替换。"
 
-    soc = _build_social_subgraph(neo4j, center=person_id, tenant_id=tid)
     soc_explain = (
         f"以「{person_id}」为中心的一跳邻域子图（资金有向边）；"
         "点击前端「查看全案关系网」进入完整图谱。"
@@ -218,9 +277,14 @@ def get_person_portrait(
         for r in rows
     ]
 
+    amt_src = (
+        "财付通交易明细金额列汇总"
+        if in_case and tenpay_amount is not None
+        else "基于图谱边数估算"
+    )
     summary = (
         f"{person_id} 在本案中共 {len(rows)} 条线索；"
-        f"估算资金往来相关规模约 {total_amount:,.0f} 元（基于图谱边数估算）；"
+        f"资金往来相关规模约 {total_amount:,.0f} 元（{amt_src}）；"
         f"综合风险分约 {risk_score:.0f}（{risk_level}）。"
     )
 
@@ -238,7 +302,20 @@ def get_person_portrait(
             anomaly_ratio=round(anomaly_ratio, 4),
             transfer_out_count=out_c,
             transfer_in_count=in_c,
-            explain="总交易额由 Neo4j 转出/转入边数结合稳定算法估算；异常比例为高风险线索数占比。",
+            explain=econ_explain,
+            fund_only_evidence=fund_only_flag,
+            fund_counterparty_lines=[
+                PortraitFundLine(
+                    counterparty=c,
+                    amount=round(a, 2),
+                    tx_count=n,
+                    rows=[
+                        PortraitFundTxRow(amount=round(x, 2))
+                        for x in fund_tx_rows_map.get(c, [])
+                    ],
+                )
+                for c, a, n in fund_lines_raw
+            ],
         ),
         behavior=PortraitBehavior(
             timeline_bins=timeline_bins,

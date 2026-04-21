@@ -1,20 +1,26 @@
 """
 MLOps：train_model（sklearn + Feature Store）、MinIO 存储、Model Registry、灰度预测与回滚。
 
-本次修复：
-- `_ensure_deployable_model` 在**租户完全没有特征行**时，也能自举出一个可用模型
-  （用可重复的合成样本训练一个最小可预测器），让「风险画像」在演示/冷启动条件下
-  也能产出结果，避免前端一直收到 `no deployable model`。
-- `predict` 当用户的在线/离线特征都为空时，回退到模型 bundle 中 `columns` 的零向量，
-  保证接口恒定返回预测结果，而不是抛出 ServiceError 让 UI 陷入无数据。
+设计要点
+- `_ensure_deployable_model` 在**租户完全没有特征行**时不会在请求线程里做训练；
+  而是把训练扔到 Celery 低优先队列，当前请求返回一个**中性预测**（prediction=0），
+  避免前端长时间 30s+ 卡住。冷启动标记用 Redis `model:bootstrap:{name}` setnx 去重。
+- `predict` 结果加 Redis 短期缓存（默认 60s），键空间按
+  `predict:{user_id}:{model_name}:{active_version or 0}:{sha1(filename)}`，避免同一份数据
+  反复推理 / 模型文件从 MinIO 反复反序列化。
+- 缓存未命中时，模型 bundle 在进程内 LRU，减少重复拉取；bundle 按
+  `(model_name, version)` 唯一标识，模型激活变更会自动让下一次 predict 拿到新版本。
 """
 
 from __future__ import annotations
 
 import hashlib
 import hmac
+import json
 import logging
 import pickle
+import threading
+from functools import lru_cache
 from typing import Any
 
 import numpy as np
@@ -37,6 +43,10 @@ from backend.app.schemas.model_schema import ModelPredictData, ModelTrainResult
 from backend.app.services import feature_service
 
 _log = logging.getLogger(__name__)
+
+PREDICT_CACHE_TTL_SEC = 60
+BOOTSTRAP_LOCK_TTL_SEC = 300  # 冷启动并发去重 5 分钟
+_BUNDLE_CACHE_LOCK = threading.Lock()
 
 
 def _sign_blob(blob: bytes) -> bytes:
@@ -197,7 +207,7 @@ def train_model(
     return out
 
 
-def load_model_bundle(minio: Minio, object_path: str) -> dict[str, Any]:
+def _load_bundle_from_minio(minio: Minio, object_path: str) -> dict[str, Any]:
     raw = minio_ops.get_bytes(minio, minio_ops.BUCKET_MODELS, object_path)
     try:
         sig = minio_ops.get_bytes(minio, minio_ops.BUCKET_MODELS, object_path + ".sig")
@@ -211,6 +221,66 @@ def load_model_bundle(minio: Minio, object_path: str) -> dict[str, Any]:
             object_path,
         )
     return pickle.loads(raw)  # noqa: S301
+
+
+# 进程内 bundle 缓存：key=(model_name, version) → bundle。
+# 容量 4 够用：同时使用的模型数量远小于此。
+_BUNDLE_CACHE: "dict[tuple[str, str], dict[str, Any]]" = {}
+_BUNDLE_CACHE_ORDER: list[tuple[str, str]] = []
+_BUNDLE_CACHE_CAP = 4
+
+
+def load_model_bundle(minio: Minio, object_path: str) -> dict[str, Any]:
+    """保留兼容签名。业务内部请使用 `_get_bundle_cached`。"""
+    return _load_bundle_from_minio(minio, object_path)
+
+
+def _get_bundle_cached(
+    minio: Minio, *, model_name: str, version: str, object_path: str
+) -> dict[str, Any]:
+    key = (str(model_name), str(version))
+    with _BUNDLE_CACHE_LOCK:
+        cached = _BUNDLE_CACHE.get(key)
+        if cached is not None:
+            return cached
+    bundle = _load_bundle_from_minio(minio, object_path)
+    with _BUNDLE_CACHE_LOCK:
+        _BUNDLE_CACHE[key] = bundle
+        _BUNDLE_CACHE_ORDER.append(key)
+        while len(_BUNDLE_CACHE_ORDER) > _BUNDLE_CACHE_CAP:
+            evict = _BUNDLE_CACHE_ORDER.pop(0)
+            _BUNDLE_CACHE.pop(evict, None)
+    return bundle
+
+
+def _predict_cache_key(
+    *, user_id: int, model_name: str, filename: str, version: str | None
+) -> str:
+    h = hashlib.sha1(filename.encode("utf-8", errors="replace")).hexdigest()[:16]
+    v = version or "0"
+    return f"predict:{int(user_id)}:{model_name}:{v}:{h}"
+
+
+def _predict_cache_get(redis: Redis | None, key: str) -> dict[str, Any] | None:
+    if redis is None:
+        return None
+    try:
+        raw = redis.get(key)
+        if not raw:
+            return None
+        return json.loads(raw)
+    except Exception:
+        _log.debug("predict_cache_get_failed key=%s", key, exc_info=True)
+        return None
+
+
+def _predict_cache_set(redis: Redis | None, key: str, data: dict[str, Any]) -> None:
+    if redis is None:
+        return
+    try:
+        redis.setex(key, PREDICT_CACHE_TTL_SEC, json.dumps(data, default=str))
+    except Exception:
+        _log.debug("predict_cache_set_failed key=%s", key, exc_info=True)
 
 
 def _choose_registry_row(
@@ -240,6 +310,53 @@ def _activate_row(db: Session, *, model_name: str, row_id: int) -> None:
         model_registry_repo.update_status(
             db, row_id, status="active", traffic_percent=100
         )
+    # 进程内 bundle 缓存也要失效，防止灰度/回滚后还取到旧版本
+    with _BUNDLE_CACHE_LOCK:
+        stale = [k for k in _BUNDLE_CACHE if k[0] == model_name]
+        for k in stale:
+            _BUNDLE_CACHE.pop(k, None)
+        _BUNDLE_CACHE_ORDER[:] = [k for k in _BUNDLE_CACHE_ORDER if k[0] != model_name]
+
+
+def _try_enqueue_async_training(
+    *,
+    model_name: str,
+    tenant_user_id: int,
+    feature_version: str,
+    redis: Redis | None,
+) -> bool:
+    """冷启动：向 low_priority 队列扔一次训练任务，并用 Redis setnx 去重，
+    防止同一租户在短时间内反复入队。失败时静默，调用方继续兜底。"""
+    lock_key = f"model:bootstrap:{model_name}:{tenant_user_id}"
+    try:
+        if redis is not None:
+            acquired = redis.set(lock_key, "1", ex=BOOTSTRAP_LOCK_TTL_SEC, nx=True)
+            if not acquired:
+                _log.info(
+                    "bootstrap_training_already_queued name=%s user=%s",
+                    model_name, tenant_user_id,
+                )
+                return False
+    except Exception:
+        _log.debug("bootstrap_lock_acquire_failed", exc_info=True)
+
+    try:
+        from backend.tasks.dispatch import submit_train_async
+
+        submit_train_async(
+            user_id=int(tenant_user_id),
+            model_name=model_name,
+            feature_version=feature_version or "v1",
+            use_all_features=False,
+        )
+        _log.info(
+            "bootstrap_training_enqueued name=%s user=%s fv=%s",
+            model_name, tenant_user_id, feature_version,
+        )
+        return True
+    except Exception:
+        _log.exception("bootstrap_training_enqueue_failed name=%s", model_name)
+        return False
 
 
 def _ensure_deployable_model(
@@ -248,13 +365,14 @@ def _ensure_deployable_model(
     *,
     model_name: str,
     user: User,
+    redis: Redis | None = None,
 ) -> Any:
     """
-    fail-soft：当 `predict` 找不到 active/canary 时，按下面顺序尝试部署：
-      1) 把该 model_name 下最新一行直接激活；
-      2) 用最新 feature_version 自动训练并激活；
-      3) 若仍没有特征，用**合成特征**训练并激活（冷启动兜底）；
-      4) 全失败时返回 None。
+    fail-soft：当 `predict` 找不到 active/canary 时：
+      1) 最新 registry 行存在 → 直接激活并返回；
+      2) 最新行不存在 → **异步**（Celery low_priority）入队一次训练任务，
+         当次请求返回 None 让 predict 走中性兜底，避免 HTTP 卡住。
+    这样 UI 能立刻收到"中等风险 + 模型正在部署"提示；任务完成后下次请求就有真模型。
     """
     latest = model_registry_repo.get_latest_for_name(db, model_name=model_name)
     if latest is not None:
@@ -265,52 +383,27 @@ def _ensure_deployable_model(
             return None
         return model_registry_repo.get_active(db, model_name=model_name) or latest
 
-    is_admin = getattr(user, "role", "") == "admin"
     tenant_user_id = int(user.id)
-
     feature_version = feature_repo.latest_version_for_tenant(
         db, tenant_user_id=tenant_user_id
+    ) or "v1"
+    _try_enqueue_async_training(
+        model_name=model_name,
+        tenant_user_id=tenant_user_id,
+        feature_version=feature_version,
+        redis=redis,
     )
-    if feature_version is None and is_admin:
-        feature_version = feature_repo.latest_version_any(db)
+    return None
 
-    try:
-        if feature_version is not None:
-            train_model(
-                db,
-                minio,
-                model_name=model_name,
-                feature_version=feature_version,
-                tenant_user_id=None if is_admin else tenant_user_id,
-                actor_user_id=tenant_user_id,
-                allow_synthetic_fallback=True,
-            )
-        else:
-            # 冷启动：直接合成训练数据
-            train_model(
-                db,
-                minio,
-                model_name=model_name,
-                feature_version="synthetic-v1",
-                tenant_user_id=tenant_user_id,
-                actor_user_id=tenant_user_id,
-                allow_synthetic_fallback=True,
-            )
-    except Exception:
-        _log.exception(
-            "auto_train_failed name=%s feature_version=%s", model_name, feature_version
-        )
-        return None
 
-    bootstrap = model_registry_repo.get_latest_for_name(db, model_name=model_name)
-    if bootstrap is None:
-        return None
-    try:
-        _activate_row(db, model_name=model_name, row_id=bootstrap.id)
-    except Exception:
-        _log.exception("auto_activate_bootstrap_failed name=%s", model_name)
-        return None
-    return model_registry_repo.get_active(db, model_name=model_name) or bootstrap
+def _neutral_prediction(model_name: str) -> ModelPredictData:
+    """冷启动 / 推理失败时的中性结果。前端会把这类 note 呈现为 warning 而非 error。"""
+    return ModelPredictData(
+        prediction=0,
+        model_name=model_name,
+        model_version="pending",
+        registry_status="bootstrapping",
+    )
 
 
 def predict(
@@ -324,19 +417,41 @@ def predict(
 ) -> ModelPredictData:
     reg = _choose_registry_row(db, model_name=model_name, user_id=int(user.id))
     if reg is None:
-        reg = _ensure_deployable_model(db, minio, model_name=model_name, user=user)
-    if reg is None:
-        raise ServiceError(
-            f"no deployable model for '{model_name}'；"
-            "请先完成特征抽取后再发起风险评估"
+        reg = _ensure_deployable_model(
+            db, minio, model_name=model_name, user=user, redis=redis
         )
+    if reg is None:
+        # 异步训练已在队列中：立即返回中性预测，UI 不阻塞
+        return _neutral_prediction(model_name)
 
-    bundle = load_model_bundle(minio, reg.object_path)
+    cache_key = _predict_cache_key(
+        user_id=int(user.id),
+        model_name=model_name,
+        filename=filename,
+        version=str(getattr(reg, "version", "0")),
+    )
+    cached = _predict_cache_get(redis, cache_key)
+    if cached is not None:
+        try:
+            return ModelPredictData.model_validate(cached)
+        except Exception:
+            _log.debug("predict_cache_hit_invalid key=%s", cache_key, exc_info=True)
+
+    try:
+        bundle = _get_bundle_cached(
+            minio,
+            model_name=model_name,
+            version=str(reg.version),
+            object_path=reg.object_path,
+        )
+    except Exception:
+        _log.exception("load_bundle_failed — fallback to neutral")
+        return _neutral_prediction(model_name)
+
     clf = bundle["model"]
     columns = list(bundle["columns"])
     feature_version = str(bundle.get("feature_version", reg.feature_version))
 
-    # 特征获取失败不再抛错；兜底零向量，同时记录告警，保证 UI 始终拿到结果
     feats: dict[str, Any] = {}
     try:
         file_row = resolve_file_for_read(db, user, filename)
@@ -371,6 +486,8 @@ def predict(
         model_version=reg.version,
         registry_status=reg.status,
     )
+    _predict_cache_set(redis, cache_key, pdata.model_dump(mode="json"))
+
     if get_settings().KAFKA_ENABLED:
         try:
             from backend.events.producer import publish_prediction_done
@@ -379,6 +496,29 @@ def predict(
         except Exception:
             _log.debug("publish_prediction_done_failed", exc_info=True)
     return pdata
+
+
+def invalidate_predict_cache(
+    redis: Redis | None, *, user_id: int | None = None, model_name: str | None = None
+) -> int:
+    """
+    模型激活 / 灰度 / 回滚后调用，让旧的预测缓存尽快失效。
+    返回清理的 key 数量；Redis 不可用时返回 0。
+    """
+    if redis is None:
+        return 0
+    pattern = f"predict:{user_id or '*'}:{model_name or '*'}:*"
+    cleared = 0
+    try:
+        for key in redis.scan_iter(pattern, count=500):
+            try:
+                redis.delete(key)
+                cleared += 1
+            except Exception:
+                continue
+    except Exception:
+        _log.debug("invalidate_predict_cache_scan_failed pattern=%s", pattern, exc_info=True)
+    return cleared
 
 
 def activate_version(db: Session, *, model_name: str, version: str) -> None:

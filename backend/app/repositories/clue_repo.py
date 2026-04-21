@@ -5,6 +5,15 @@ from sqlalchemy.orm import Session
 from backend.model.clue import Clue
 
 
+def list_by_case(db: Session, *, case_id: int) -> list[Clue]:
+    return (
+        db.query(Clue)
+        .filter(Clue.case_id == case_id)
+        .order_by(Clue.risk_score.desc(), Clue.id.asc())
+        .all()
+    )
+
+
 def list_by_case_and_person(db: Session, *, case_id: int, person_id: str) -> list[Clue]:
     return (
         db.query(Clue)

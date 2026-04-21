@@ -17,7 +17,16 @@ def is_public_path(path: str) -> bool:
     p = path.split("?", 1)[0].rstrip("/") or "/"
     if p == "/auth/login":
         return True
-    if p in ("/docs", "/openapi.json", "/redoc", "/metrics", "/live", "/ready", "/ws"):
+    if p in (
+        "/docs",
+        "/openapi.json",
+        "/redoc",
+        "/metrics",
+        "/live",
+        "/ready",
+        "/ready/deep",
+        "/ws",
+    ):
         return True
     if p.startswith("/docs/") or p.startswith("/redoc"):
         return True

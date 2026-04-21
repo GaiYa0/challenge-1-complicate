@@ -2,14 +2,12 @@
 defineProps<{
   label: string
   value: string | number
-  icon?: string
   danger?: boolean
 }>()
 </script>
 
 <template>
   <div class="stat-card" :class="{ 'stat-danger': danger }">
-    <div v-if="icon" class="stat-icon">{{ icon }}</div>
     <div class="stat-body">
       <span class="stat-value">{{ value }}</span>
       <span class="stat-label">{{ label }}</span>
@@ -31,9 +29,8 @@ defineProps<{
   border-color: var(--app-danger);
   background: #fef2f2;
 }
-.stat-icon {
-  font-size: 32px;
-  flex-shrink: 0;
+html.dark .stat-danger {
+  background: rgba(248, 113, 113, 0.08);
 }
 .stat-body {
   display: flex;

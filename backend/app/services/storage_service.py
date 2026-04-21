@@ -59,7 +59,7 @@ def _validate_upload(raw_filename: str, content: bytes) -> str:
         raise ServiceError("invalid filename")
     suf = Path(base).suffix.lower()
     if suf not in ALLOWED_UPLOAD_EXTENSIONS:
-        raise ServiceError("only csv or json allowed")
+        raise ServiceError(f"不支持的文件格式 ({suf})，仅支持 CSV / XLS / XLSX / JSON")
     if len(content) > MAX_UPLOAD_BYTES:
         raise ServiceError("file too large")
     return base

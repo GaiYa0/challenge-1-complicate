@@ -8,6 +8,7 @@ class GraphUserNodeIn(BaseModel):
 class GraphEdgeIn(BaseModel):
     from_user: str
     to_user: str
+    amount: float | None = None
 
 
 class GraphRelation(BaseModel):
@@ -37,6 +38,7 @@ class GraphVisualizationEdge(BaseModel):
     id: str
     source: str
     target: str
+    weight: float | None = None
 
 
 class GraphVisualizationData(BaseModel):

@@ -4,8 +4,9 @@
 import { ref, computed } from 'vue'
 import { defineStore } from 'pinia'
 
-import { getClueDetail, type ClueDetail } from '../../api/clue'
+import { getClueDetail, type ClueDetail, type ClueListItem } from '../../api/clue'
 import type { Clue } from '../../types/domain'
+import http from '../../api/request'
 
 export const useClueStore = defineStore('clue', () => {
   const caseId = ref<number | null>(null)
@@ -17,6 +18,9 @@ export const useClueStore = defineStore('clue', () => {
   const detailLoading = ref(false)
   const detailError = ref<string | null>(null)
   const currentDetailId = ref<number | null>(null)
+
+  const clueList = ref<ClueListItem[]>([])
+  const listLoading = ref(false)
 
   const selectedClue = computed(() => {
     const cid = caseId.value
@@ -52,6 +56,24 @@ export const useClueStore = defineStore('clue', () => {
     }
   }
 
+  /** 加载案件下所有线索（用于线索风险列表页） */
+  async function fetchList(targetCaseId: number): Promise<ClueListItem[]> {
+    listLoading.value = true
+    try {
+      const data = await http.get(`/cases/${targetCaseId}/clues`, {
+        skipGlobalLoading: true,
+        silentError: true,
+      }) as ClueListItem[]
+      clueList.value = Array.isArray(data) ? data : []
+      return clueList.value
+    } catch {
+      clueList.value = []
+      return []
+    } finally {
+      listLoading.value = false
+    }
+  }
+
   async function fetchDetail(clueId: number, opts?: { force?: boolean }): Promise<ClueDetail | null> {
     if (!Number.isFinite(clueId)) return null
     currentDetailId.value = clueId
@@ -82,6 +104,8 @@ export const useClueStore = defineStore('clue', () => {
     detailLoading.value = false
     detailError.value = null
     currentDetailId.value = null
+    clueList.value = []
+    listLoading.value = false
   }
 
   return {
@@ -95,10 +119,13 @@ export const useClueStore = defineStore('clue', () => {
     detailError,
     currentDetailId,
     currentDetail,
+    clueList,
+    listLoading,
     bindCase,
     setCluesForCase,
     selectClue,
     clearForCase,
+    fetchList,
     fetchDetail,
     reset,
   }

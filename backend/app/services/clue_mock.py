@@ -1,5 +1,5 @@
 """
-Mock 线索生成：仅当 Neo4j 中已存在该 person_id（User.name）时生成；随机 5~15 条。
+Mock 线索生成：在尚无 PG 线索时写入占位数据；默认多类随机，纯财付通案件可仅资金类。
 """
 
 from __future__ import annotations
@@ -92,12 +92,24 @@ def _title_and_summary(cat: ClueCategory, person_id: str, idx: int) -> tuple[str
     return titles[cat], summaries[cat]
 
 
-def generate_mock_clues(*, case_id: int, person_id: str, n: int | None = None) -> list[Clue]:
-    count = n if n is not None else random.randint(5, 15)
+def generate_mock_clues(
+    *,
+    case_id: int,
+    person_id: str,
+    n: int | None = None,
+    fund_only: bool = False,
+) -> list[Clue]:
+    """
+    n: 线索条数；未指定时在 5~15 间随机。fund_only=True 时全部为资金类（纯财付通案件用）。
+    """
+    if n is not None:
+        count = min(15, max(5, int(n)))
+    else:
+        count = random.randint(5, 15)
     cats = list(ClueCategory)
     rows: list[Clue] = []
     for i in range(count):
-        cat = random.choice(cats)
+        cat = ClueCategory.fund if fund_only else random.choice(cats)
         level = _pick_risk_level()
         score = _score_for_level(level)
         title, summary = _title_and_summary(cat, person_id, i + 1)

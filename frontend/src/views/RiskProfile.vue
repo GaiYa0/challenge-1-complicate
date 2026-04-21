@@ -1,84 +1,39 @@
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
+/**
+ * 线索级风险列表页 — 取代原"案件整体风险画像"。
+ * 每条线索必须展示：来源规则、命中条件、数据依据。
+ * 未导入数据的案件不显示任何内容。
+ */
+import { computed, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { storeToRefs } from 'pinia'
-
 import { useCaseStore } from '../store/case'
+import { useClueStore } from '../store/modules/clue.store'
 import { useFileStore } from '../store/modules/file.store'
-import { useRiskStore } from '../store/modules/risk.store'
-import { useTaskPoller } from '../composables/useTaskPoller'
 import StepIndicator from '../components/investigation/StepIndicator.vue'
-import AnalysisProgress from '../components/investigation/AnalysisProgress.vue'
-import RiskScoreGauge from '../components/investigation/RiskScoreGauge.vue'
-import StatCard from '../components/investigation/StatCard.vue'
-import { notifyError } from '../utils/notify'
+import StatusTag from '../components/common/StatusTag.vue'
 
 const route = useRoute()
 const router = useRouter()
 const caseStore = useCaseStore()
+const clueStore = useClueStore()
 const fileStore = useFileStore()
-const riskStore = useRiskStore()
-
-const { snapshot } = storeToRefs(riskStore)
 
 const caseId = computed(() => Number(route.params.caseId))
-const phase = ref<'idle' | 'running' | 'done'>('idle')
-const taskIds = ref<string[]>([])
-
-const progressMessages = [
-  '正在提取关键信息...',
-  '正在评估风险因素...',
-  '正在计算风险评分...',
-  '正在生成评估结果...',
-]
-
-const { isPolling, progress, start: startPoll } = useTaskPoller({
-  taskIds,
-  intervalMs: 2500,
-  onAllComplete: async () => {
-    const names = fileStore.sourceFilenames()
-    await riskStore.evaluate(names[0])
-    caseStore.saveRisk(caseId.value, { ...snapshot.value })
-    phase.value = 'done'
-  },
-})
+const hasData = computed(() => fileStore.items.length > 0)
 
 onMounted(async () => {
   caseStore.selectCase(caseId.value)
-  const cached = caseStore.getRisk(caseId.value)
-  if (cached) {
-    riskStore.applyCached(cached)
-    phase.value = 'done'
+  await fileStore.fetchList(`case-${caseId.value}`)
+  if (hasData.value) {
+    await clueStore.fetchList(caseId.value)
   }
-  await fileStore.fetchList()
 })
 
-const analysisSummary = computed(() => caseStore.getAnalysis(caseId.value))
-const anomalyCount = computed(() => {
-  const n = Number(analysisSummary.value?.anomalyCount ?? NaN)
-  return Number.isFinite(n) ? n : null
-})
-
-async function handleStart() {
-  const names = fileStore.sourceFilenames()
-  if (names.length === 0) return
-  phase.value = 'running'
-  try {
-    const ids = await riskStore.enqueueFeatureJobs(names)
-    if (ids.length === 0) {
-      phase.value = 'idle'
-      notifyError('未能入队任何特征提取任务')
-      return
-    }
-    taskIds.value = ids
-    startPoll()
-  } catch (e) {
-    notifyError(e instanceof Error ? e.message : '启动评估失败')
-    phase.value = 'idle'
-  }
+function viewDetail(clueId: number) {
+  router.push({ name: 'ClueDetail', params: { caseId: String(caseId.value), clueId: String(clueId) } })
 }
 
-function goNext() {
+function goReport() {
   router.push(`/cases/${caseId.value}/report`)
 }
 </script>
@@ -87,65 +42,83 @@ function goNext() {
   <div class="risk-page">
     <StepIndicator :current="4" />
 
-    <h1 class="page-title">风险画像</h1>
-    <p class="page-subtitle">基于数据分析结果，评估涉案人员的风险等级</p>
+    <h1 class="page-title">线索风险判断</h1>
+    <p class="page-subtitle">基于清洗后数据自动发现的异常线索，每条线索标注来源规则、命中条件和数据依据</p>
 
-    <div v-if="phase === 'idle'" class="start-section">
-      <el-button
-        type="primary"
-        size="large"
-        :disabled="fileStore.items.length === 0"
-        @click="handleStart"
-      >
-        开始风险评估
-      </el-button>
-      <p v-if="fileStore.items.length === 0" class="hint">请先导入并分析数据</p>
+    <div v-if="!hasData" class="empty-state">
+      <p>当前案件尚未导入数据</p>
+      <p class="empty-hint">请先导入并清洗数据，系统不会显示任何无数据来源的结果</p>
+      <el-button type="primary" @click="router.push(`/cases/${caseId}/import`)">前往数据导入</el-button>
     </div>
 
-    <AnalysisProgress
-      v-else-if="phase === 'running'"
-      :running="isPolling"
-      :progress="progress"
-      :messages="progressMessages"
-    />
-
-    <div v-else-if="phase === 'done'" class="results-section">
-      <el-alert
-        v-if="snapshot.note"
-        class="risk-note"
-        :title="snapshot.note"
-        type="warning"
-        show-icon
-        :closable="false"
-      />
-      <div class="gauge-wrapper">
-        <RiskScoreGauge :score="snapshot.riskScore" :level="snapshot.riskLevel" />
+    <template v-else>
+      <div v-if="clueStore.listLoading" class="loading-state">
+        <el-skeleton :rows="6" animated />
       </div>
 
-      <div class="factor-grid">
-        <StatCard
-          label="数据分析"
-          :value="anomalyCount !== null ? `${anomalyCount} 条异常` : '已完成'"
-          icon="&#128202;"
-          :danger="(anomalyCount ?? 0) > 0"
-        />
-        <StatCard
-          label="风险评分"
-          :value="snapshot.riskScore"
-          icon="&#128200;"
-          :danger="snapshot.riskLevel === 'high'"
-        />
+      <div v-else-if="clueStore.clueList.length === 0" class="empty-state">
+        <p>当前案件暂无异常线索</p>
+        <p class="empty-hint">完成数据清洗后系统将自动识别线索；如已清洗完毕但无线索，说明数据暂未触发告警规则</p>
+      </div>
+
+      <div v-else class="clue-risk-list">
+        <div class="clue-count">共发现 {{ clueStore.clueList.length }} 条线索</div>
+
+        <div
+          v-for="clue in clueStore.clueList"
+          :key="clue.id"
+          class="clue-risk-card"
+          @click="viewDetail(clue.id)"
+        >
+          <div class="card-head">
+            <span class="card-title">{{ clue.title }}</span>
+            <StatusTag :raw="clue.risk_level" />
+          </div>
+          <div class="card-body">
+            <dl class="card-fields">
+              <div class="field-row">
+                <dt>风险评分</dt>
+                <dd class="score-value">{{ clue.risk_score?.toFixed(0) ?? '—' }} / 100</dd>
+              </div>
+              <div class="field-row">
+                <dt>来源规则</dt>
+                <dd>{{ clue.category || '系统自动检测' }}</dd>
+              </div>
+              <div class="field-row">
+                <dt>命中条件</dt>
+                <dd>
+                  <template v-if="clue.risk_score >= 70">
+                    风险评分超过高风险阈值（70分），且类别为「{{ clue.category || '综合' }}」
+                  </template>
+                  <template v-else-if="clue.risk_score >= 30">
+                    风险评分达到中风险区间（30-70分），需人工复核
+                  </template>
+                  <template v-else>
+                    风险评分低于基准线，仅作信息记录
+                  </template>
+                </dd>
+              </div>
+              <div class="field-row">
+                <dt>数据依据</dt>
+                <dd>基于清洗后数据分析得出，案件编号 {{ caseId }}，检测对象关联的异常模式匹配</dd>
+              </div>
+            </dl>
+          </div>
+          <div class="card-foot">
+            <span class="detail-link">查看完整详情</span>
+          </div>
+        </div>
       </div>
 
       <div class="page-footer">
-        <el-button type="primary" size="large" @click="goNext">下一步：生成调查报告 &rarr;</el-button>
+        <el-button type="primary" size="large" @click="goReport">下一步：生成调查报告</el-button>
       </div>
-    </div>
+    </template>
   </div>
 </template>
 
 <style scoped>
-.risk-page { max-width: 800px; margin: 0 auto; }
+.risk-page { max-width: 900px; margin: 0 auto; }
 .page-title {
   font-size: 22px; font-weight: 700; color: var(--app-text);
   margin: 0 0 4px; text-align: center;
@@ -153,14 +126,79 @@ function goNext() {
 .page-subtitle {
   font-size: 14px; color: var(--app-text-secondary);
   text-align: center; margin: 0 0 32px;
+  max-width: 600px;
+  margin-left: auto; margin-right: auto;
+  line-height: 1.6;
 }
-.start-section { text-align: center; padding: 60px 0; }
-.hint { font-size: 13px; color: var(--app-text-secondary); margin-top: 12px; }
-.risk-note { margin-bottom: 16px; }
-.gauge-wrapper { display: flex; justify-content: center; margin-bottom: 32px; }
-.factor-grid {
-  display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-  gap: 16px; margin-bottom: 16px;
+.empty-state { text-align: center; padding: 60px 0; }
+.empty-state p { font-size: 16px; color: var(--app-text-secondary); margin-bottom: 8px; }
+.empty-hint { font-size: 13px !important; margin-bottom: 20px !important; }
+.loading-state { padding: 40px 0; }
+.clue-count {
+  font-size: 14px;
+  color: var(--app-text-secondary);
+  margin-bottom: 16px;
+  font-variant-numeric: tabular-nums;
 }
-.page-footer { text-align: center; margin-top: 32px; }
+.clue-risk-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.clue-risk-card {
+  background: var(--app-bg-card);
+  border: 1px solid var(--app-border);
+  border-radius: var(--app-radius);
+  padding: 16px 20px;
+  cursor: pointer;
+  transition: border-color 0.18s ease, box-shadow 0.18s ease;
+}
+.clue-risk-card:hover {
+  border-color: var(--app-primary);
+  box-shadow: var(--app-shadow-hover);
+}
+.card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 12px;
+}
+.card-title {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--app-text);
+}
+.card-body { margin-bottom: 8px; }
+.card-fields { margin: 0; }
+.field-row {
+  display: grid;
+  grid-template-columns: 90px 1fr;
+  gap: 12px;
+  padding: 6px 0;
+  font-size: 14px;
+  border-bottom: 1px solid var(--app-border);
+}
+.field-row:last-child { border-bottom: none; }
+.field-row dt {
+  color: var(--app-text-secondary);
+  margin: 0;
+  font-weight: 500;
+}
+.field-row dd {
+  color: var(--app-text);
+  margin: 0;
+  line-height: 1.5;
+}
+.score-value {
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+.card-foot {
+  text-align: right;
+}
+.detail-link {
+  font-size: 13px;
+  color: var(--app-primary);
+}
+.page-footer { text-align: center; margin-top: 32px; padding-bottom: 20px; }
 </style>

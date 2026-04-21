@@ -63,6 +63,36 @@ def list_files_for_tenant(db: Session, *, tenant_user_id: int) -> list[File]:
     return list(db.execute(q).scalars().all())
 
 
+def list_tabular_files_for_case_dataset(
+    db: Session, *, tenant_user_id: int, case_id: int
+) -> list[File]:
+    """案件专属 dataset（如 case-8）下的表格文件 CSV/XLS/XLSX，排除特征衍生文件。"""
+    ds = f"case-{int(case_id)}"
+    q = (
+        select(File)
+        .where(File.user_id == tenant_user_id, File.dataset == ds)
+        .order_by(File.created_at.asc(), File.id)
+    )
+    rows = list(db.execute(q).scalars().all())
+    out: list[File] = []
+    for f in rows:
+        fn = (f.filename or "").lower()
+        if not (fn.endswith(".csv") or fn.endswith(".xls") or fn.endswith(".xlsx")):
+            continue
+        base = f.filename or ""
+        if base.startswith("feature_"):
+            continue
+        out.append(f)
+    return out
+
+
+def list_csv_files_for_case_dataset(
+    db: Session, *, tenant_user_id: int, case_id: int
+) -> list[File]:
+    """兼容旧名，等价于 list_tabular_files_for_case_dataset。"""
+    return list_tabular_files_for_case_dataset(db, tenant_user_id=tenant_user_id, case_id=case_id)
+
+
 def list_files_all(db: Session) -> list[File]:
     """仅管理员场景。"""
     q = select(File).order_by(File.created_at.desc(), File.id)

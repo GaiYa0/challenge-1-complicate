@@ -1,10 +1,11 @@
 <script setup lang="ts">
-import * as echarts from 'echarts'
-import type { EChartsOption } from 'echarts'
-import { nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import echarts, { type ECharts, type EChartsOption } from '../../utils/echarts'
+import { nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import type { GraphVisualizationData } from '../../api/graph'
 import { graphToFundFlowOption } from '../../utils/portraitCharts'
+import { useLazyRender } from '../../composables/useLazyRender'
+import { useEchartsTheme } from '../../composables/useEchartsTheme'
 
 const props = defineProps<{
   caseId: number
@@ -15,7 +16,9 @@ const props = defineProps<{
 
 const router = useRouter()
 const hostRef = ref<HTMLDivElement | null>(null)
-let chart: echarts.ECharts | null = null
+const { visible } = useLazyRender(hostRef)
+const { themeName, onThemeChange } = useEchartsTheme()
+let chart: ECharts | null = null
 
 function resize() {
   chart?.resize()
@@ -27,17 +30,16 @@ function apply() {
   chart.setOption(opt, { notMerge: true })
 }
 
-onMounted(() => {
-  void nextTick(() => {
-    const el = hostRef.value
-    if (!el) return
-    chart = echarts.init(el)
-    window.addEventListener('resize', resize)
-    apply()
-    chart.on('click', () => {
-      goNetwork()
-    })
-  })
+function mount() {
+  const el = hostRef.value
+  if (!el || chart) return
+  chart = echarts.init(el, themeName.value)
+  chart.on('click', () => goNetwork())
+  apply()
+}
+
+watch(visible, (v) => {
+  if (v) void nextTick(() => mount())
 })
 
 watch(
@@ -46,13 +48,23 @@ watch(
   { deep: true },
 )
 
+onThemeChange(() => {
+  try { chart?.dispose() } catch { /* noop */ }
+  chart = null
+  if (visible.value) void nextTick(() => mount())
+})
+
+if (typeof window !== 'undefined') {
+  window.addEventListener('resize', resize)
+}
+
 function goNetwork() {
   void router.push({ name: 'RelationshipNetwork', params: { caseId: String(props.caseId) } })
 }
 
 onBeforeUnmount(() => {
-  window.removeEventListener('resize', resize)
-  chart?.dispose()
+  if (typeof window !== 'undefined') window.removeEventListener('resize', resize)
+  try { chart?.dispose() } catch { /* noop */ }
   chart = null
 })
 </script>

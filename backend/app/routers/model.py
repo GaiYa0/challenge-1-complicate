@@ -145,8 +145,10 @@ def registry_activate(
     body: ModelVersionIn,
     current_user: Annotated[User, Depends(require_role("admin"))],
     db: Session = Depends(get_db),
+    redis: Redis = Depends(get_redis),
 ):
     ml_model_service.activate_version(db, model_name=body.model_name, version=body.version)
+    ml_model_service.invalidate_predict_cache(redis, model_name=body.model_name)
     return success_for_request(request, None, msg="activated")
 
 
@@ -156,6 +158,7 @@ def registry_canary(
     body: ModelCanaryIn,
     current_user: Annotated[User, Depends(require_role("admin"))],
     db: Session = Depends(get_db),
+    redis: Redis = Depends(get_redis),
 ):
     ml_model_service.set_canary(
         db,
@@ -163,6 +166,7 @@ def registry_canary(
         version=body.version,
         traffic_percent=body.traffic_percent,
     )
+    ml_model_service.invalidate_predict_cache(redis, model_name=body.model_name)
     return success_for_request(request, None, msg="canary set")
 
 
@@ -171,9 +175,11 @@ def registry_promote_canary(
     request: Request,
     current_user: Annotated[User, Depends(require_role("admin"))],
     db: Session = Depends(get_db),
+    redis: Redis = Depends(get_redis),
     model_name: str = Query("default"),
 ):
     ml_model_service.promote_canary_to_active(db, model_name=model_name)
+    ml_model_service.invalidate_predict_cache(redis, model_name=model_name)
     return success_for_request(request, None, msg="canary promoted to active")
 
 
@@ -183,6 +189,8 @@ def registry_rollback(
     body: ModelVersionIn,
     current_user: Annotated[User, Depends(require_role("admin"))],
     db: Session = Depends(get_db),
+    redis: Redis = Depends(get_redis),
 ):
     ml_model_service.rollback_to_version(db, model_name=body.model_name, version=body.version)
+    ml_model_service.invalidate_predict_cache(redis, model_name=body.model_name)
     return success_for_request(request, None, msg="rolled back")

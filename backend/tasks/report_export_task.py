@@ -78,9 +78,11 @@ def report_generate_task(
         if user is None:
             return {"code": 1, "msg": "user not found", "data": None}
 
+        mio = runtime.minio_client()
         portrait = portrait_service.get_person_portrait(
             db,
             driver,
+            mio,
             user=user,
             case_id=case_id,
             person_id=person_id,
@@ -101,7 +103,6 @@ def report_generate_task(
         else:
             return {"code": 2, "msg": "invalid format", "data": None}
 
-        mio = runtime.minio_client()
         uid = uuid.uuid4().hex[:12]
         safe_p = _safe_segment(person_id)
         object_name = f"reports/{user_id}/{case_id}/{safe_p}_{uid}.{ext}"

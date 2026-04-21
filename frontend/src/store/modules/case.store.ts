@@ -4,7 +4,7 @@
  */
 import { ref, computed } from 'vue'
 import { defineStore } from 'pinia'
-import { listCases, createCase, updateCase, deleteCase, createDemoCase } from '../../api/case'
+import { listCases, createCase, updateCase, deleteCase, patchCase } from '../../api/case'
 import type { CaseOut, CaseCreate } from '../../api/case'
 
 export const useCaseStore = defineStore('case', () => {
@@ -34,12 +34,6 @@ export const useCaseStore = defineStore('case', () => {
     }
   }
 
-  async function addDemoCase(): Promise<CaseOut> {
-    const created = (await createDemoCase()) as unknown as CaseOut
-    await fetchCases(1)
-    return created
-  }
-
   async function addCase(body: CaseCreate): Promise<CaseOut> {
     const data = await createCase(body)
     const created = data as unknown as CaseOut
@@ -60,6 +54,14 @@ export const useCaseStore = defineStore('case', () => {
     const updated = data as unknown as CaseOut
     const idx = cases.value.findIndex((c) => c.id === id)
     if (idx !== -1) cases.value[idx] = updated
+  }
+
+  async function renameCase(id: number, newName: string): Promise<CaseOut> {
+    const data = await patchCase(id, { name: newName })
+    const updated = data as unknown as CaseOut
+    const idx = cases.value.findIndex((c) => c.id === id)
+    if (idx !== -1) cases.value[idx] = updated
+    return updated
   }
 
   function selectCase(id: number) {
@@ -99,10 +101,10 @@ export const useCaseStore = defineStore('case', () => {
     currentCase,
     loading,
     fetchCases,
-    addDemoCase,
     addCase,
     removeCase,
     completeCase,
+    renameCase,
     selectCase,
     saveAnalysis,
     getAnalysis,

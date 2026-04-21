@@ -1,13 +1,18 @@
 import type { Router } from 'vue-router'
+import NProgress from 'nprogress'
+import 'nprogress/nprogress.css'
 import { useUiStore } from '../store/ui'
 import { notifyWarning } from '../utils/notify'
 import { useUserStore } from '../store/user'
+
+NProgress.configure({ showSpinner: false, trickleSpeed: 180, minimum: 0.08 })
 
 /** 在 main.ts 中于 app.use(router) 之后调用，避免 router↔store 循环依赖 */
 export function setupRouterGuard(router: Router) {
   const ui = useUiStore()
 
   router.beforeEach(async (to) => {
+    NProgress.start()
     if (to.name !== 'Login') {
       ui.startPageLoading()
     }
@@ -48,5 +53,11 @@ export function setupRouterGuard(router: Router) {
 
   router.afterEach(() => {
     ui.endPageLoading()
+    NProgress.done()
+  })
+
+  router.onError(() => {
+    ui.endPageLoading()
+    NProgress.done()
   })
 }

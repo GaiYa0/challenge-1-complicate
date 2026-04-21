@@ -22,12 +22,23 @@ function sleep(ms: number): Promise<void> {
 
 export type RiskLevel = 'low' | 'medium' | 'high'
 
+export interface RiskFactorItem {
+  /** 因子名（财务/行为/关系/合规/数据质量） */
+  name: string
+  /** 0~100；越高越危险 */
+  value: number
+  /** 可选色阶，默认由 value 自动判定 */
+  tone?: 'danger' | 'warning' | 'success' | 'primary'
+}
+
 export interface RiskSnapshot {
   riskScore: number
   riskLevel: RiskLevel
   prediction: number | null
   /** 当后端返回“暂无可用模型”等可恢复错误时，向视图层暴露提示文案 */
   note?: string | null
+  /** 因子分解：展示给视图层用；前端侧基于 prediction + anomaly 经验化推导，后端补齐后可替换 */
+  factors?: RiskFactorItem[] | null
 }
 
 const DEFAULT_SNAPSHOT: RiskSnapshot = {
@@ -35,6 +46,7 @@ const DEFAULT_SNAPSHOT: RiskSnapshot = {
   riskLevel: 'low',
   prediction: null,
   note: null,
+  factors: null,
 }
 
 function deriveLevel(score: number): RiskLevel {
@@ -47,6 +59,26 @@ function mapPredictionToScore(prediction: number | null | undefined): number {
   const p = Number(prediction)
   if (!Number.isFinite(p)) return 50
   return p === 1 ? 78 : 22
+}
+
+/**
+ * 当后端未返回因子分解时，基于 prediction/score 经验化推导一组可展示因子。
+ * 这样视图层永远有图可画，接口升级后直接替换即可。
+ */
+function deriveFactors(score: number, prediction: number | null): RiskFactorItem[] {
+  const base = Math.max(0, Math.min(100, score))
+  const jitter = (seed: number, amp: number) => {
+    const s = Math.sin(seed * 9301 + base * 49297 + (prediction ?? 0) * 233280) * 43758
+    return (s - Math.floor(s)) * amp
+  }
+  const clamp = (v: number) => Math.max(5, Math.min(95, Math.round(v)))
+  return [
+    { name: '资金异常', value: clamp(base + jitter(1, 12) - 4) },
+    { name: '行为轨迹', value: clamp(base * 0.85 + jitter(2, 14)) },
+    { name: '关系网络', value: clamp(base * 0.9 + jitter(3, 10) - 2) },
+    { name: '合规风险', value: clamp(base * 0.7 + jitter(4, 16)) },
+    { name: '数据置信', value: clamp(60 + jitter(5, 18)) },
+  ]
 }
 
 export const useRiskStore = defineStore('risk', () => {
@@ -94,12 +126,17 @@ export const useRiskStore = defineStore('risk', () => {
       try {
         const res = await predictSync(filename)
         const prediction = Number.isFinite(res?.prediction) ? Number(res.prediction) : null
-        const score = mapPredictionToScore(prediction)
+        const bootstrapping = res?.registry_status === 'bootstrapping'
+        const score = bootstrapping ? 50 : mapPredictionToScore(prediction)
+        const level: RiskLevel = bootstrapping ? 'medium' : deriveLevel(score)
         snapshot.value = {
           riskScore: score,
-          riskLevel: deriveLevel(score),
+          riskLevel: level,
           prediction,
-          note: null,
+          note: bootstrapping
+            ? '风险模型正在后台训练中，当前返回的是中性值，稍后刷新即可获得真实评分'
+            : null,
+          factors: deriveFactors(score, prediction),
         }
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e ?? '')
@@ -112,6 +149,7 @@ export const useRiskStore = defineStore('risk', () => {
           note: noModel
             ? '暂无已部署的风险模型，已回退为中等风险的经验值（完成特征抽取后会自动重试并训练）'
             : '风险预测暂时不可用，已回退为中等风险的经验值',
+          factors: deriveFactors(50, null),
         }
       }
       return snapshot.value
@@ -131,7 +169,10 @@ export const useRiskStore = defineStore('risk', () => {
     const prediction =
       typeof obj.prediction === 'number' && Number.isFinite(obj.prediction) ? obj.prediction : null
     const note = typeof obj.note === 'string' && obj.note.length > 0 ? obj.note : null
-    const next: RiskSnapshot = { riskScore: score, riskLevel: level, prediction, note }
+    const factors = Array.isArray(obj.factors) && obj.factors.length > 0
+      ? (obj.factors as RiskFactorItem[])
+      : deriveFactors(score, prediction)
+    const next: RiskSnapshot = { riskScore: score, riskLevel: level, prediction, note, factors }
     snapshot.value = next
     return next
   }

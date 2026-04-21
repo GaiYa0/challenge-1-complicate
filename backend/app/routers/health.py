@@ -44,14 +44,6 @@ def test(
     return success_for_request(request, data)
 
 
-@router.get("/demo", response_model=ApiResponse[TestData])
-def demo(
-    request: Request,
-    current_user: Annotated[User, Depends(get_current_user)],
-):
-    return success_for_request(request, TestData(msg="demo ok"))
-
-
 @router.get("/analysis/dashboard", response_model=ApiResponse[AnalysisDashboardData])
 def analysis_dashboard(
     request: Request,
@@ -104,9 +96,6 @@ async def analysis_graph(
     edge_limit: Annotated[int, Query(ge=1, le=5000, description="最多读取的 TRANSFER 边条数")] = 500,
 ):
     settings = get_settings()
-    if settings.DEMO_MODE:
-        return success_for_request(request, graph_service.demo_visualization_data())
-
     tid = int(current_user.id)
     cap = settings.GRAPH_NODE_CAP
     cache_key = f"graph:viz:{tid}:{edge_limit}:{cap}"
@@ -142,10 +131,6 @@ async def analysis_degree(
     neo4j_driver: Annotated[Driver, Depends(get_neo4j_driver)],
 ):
     settings = get_settings()
-    if settings.DEMO_MODE:
-        viz = graph_service.demo_visualization_data()
-        return success_for_request(request, graph_service.demo_out_degree_from_viz(viz))
-
     tid = int(current_user.id)
     cache_key = f"graph:degree:{tid}"
 

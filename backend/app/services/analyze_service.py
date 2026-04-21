@@ -10,12 +10,14 @@ from backend.app.schemas.task import TaskEnqueueData
 from backend.app.services.file_service import file_owner_user_id_if_accessible
 
 
-def enqueue_analyze_job(db: Session, kind: str, filename: str, user: User) -> TaskEnqueueData:
+def enqueue_analyze_job(
+    db: Session, kind: str, filename: str, user: User, *, dataset: str | None = None,
+) -> TaskEnqueueData:
     """投递 analyze_data_task；mock 不校验文件，其余 kind 需文件存在。"""
     from backend.tasks.analyze_task import analyze_data_task
 
     if kind != "mock":
-        owner_id = file_owner_user_id_if_accessible(db, filename, user)
+        owner_id = file_owner_user_id_if_accessible(db, filename, user, dataset=dataset)
         if owner_id is None:
             raise ServiceError("file not found")
     else:

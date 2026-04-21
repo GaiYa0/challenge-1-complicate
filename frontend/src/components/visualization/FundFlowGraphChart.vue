@@ -3,14 +3,14 @@
  * 多维可视化 — 资金流向有向图：边宽∝金额，箭头表示方向；可传入路径高亮
  * 数据：GET /analysis/fund
  */
-import * as echarts from 'echarts'
-import type { EChartsOption } from 'echarts'
+import echarts, { type ECharts, type EChartsOption } from '../../utils/echarts'
 import { nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { getAnalysisFundViz, type FundVizData } from '../../api/analysisViz'
 import {
   buildFundFlowGraphOption,
   highlightPathEdgeIds,
 } from '../../utils/analysisVizTransform'
+import { useEchartsTheme } from '../../composables/useEchartsTheme'
 
 const props = withDefaults(
   defineProps<{
@@ -31,10 +31,29 @@ const loading = ref(false)
 const err = ref<string | null>(null)
 const raw = ref<FundVizData | null>(null)
 const hostRef = ref<HTMLDivElement | null>(null)
-let chart: echarts.ECharts | null = null
+const { themeName, onThemeChange } = useEchartsTheme()
+let chart: ECharts | null = null
 
 function resize() {
   chart?.resize()
+}
+
+function mount() {
+  const el = hostRef.value
+  if (!el || chart) return
+  chart = echarts.init(el, themeName.value)
+  chart.on('click', (p) => {
+    if (p.dataType === 'node' && p.data && typeof (p.data as { id?: string }).id === 'string') {
+      emit('nodeClick', (p.data as { id: string }).id)
+    }
+    if (p.dataType === 'edge' && p.data) {
+      const d = p.data as { source?: string; target?: string; value?: number }
+      if (d.source && d.target) {
+        emit('edgeClick', d.source, d.target, Number(d.value ?? 0))
+      }
+    }
+  })
+  applyOption()
 }
 
 function applyOption() {
@@ -72,22 +91,18 @@ async function load() {
 
 onMounted(() => {
   void nextTick(() => {
-    const el = hostRef.value
-    if (!el) return
-    chart = echarts.init(el)
+    mount()
     window.addEventListener('resize', resize)
-    chart.on('click', (p) => {
-      if (p.dataType === 'node' && p.data && typeof (p.data as { id?: string }).id === 'string') {
-        emit('nodeClick', (p.data as { id: string }).id)
-      }
-      if (p.dataType === 'edge' && p.data) {
-        const d = p.data as { source?: string; target?: string; value?: number }
-        if (d.source && d.target) {
-          emit('edgeClick', d.source, d.target, Number(d.value ?? 0))
-        }
-      }
-    })
     void load()
+  })
+})
+
+onThemeChange(() => {
+  try { chart?.dispose() } catch { /* noop */ }
+  chart = null
+  void nextTick(() => {
+    mount()
+    applyOption()
   })
 })
 

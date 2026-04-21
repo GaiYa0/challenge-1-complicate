@@ -1,21 +1,25 @@
 <script setup lang="ts">
-import * as echarts from 'echarts'
-import type { ECharts, EChartsOption } from 'echarts'
-import { nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import echarts, { type ECharts, type EChartsOption } from '../../utils/echarts'
+import { nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import { throttle } from '../../utils/throttle'
+import { useLazyRender } from '../../composables/useLazyRender'
+import { useEchartsTheme } from '../../composables/useEchartsTheme'
 
 const props = defineProps<{
   option: EChartsOption
+  /** 是否启用进入视口后再挂载，默认启用 */
+  lazy?: boolean
 }>()
 
 const hostRef = ref<HTMLDivElement | null>(null)
+const { visible } = useLazyRender(hostRef, { fallbackVisible: true })
+const { themeName, onThemeChange } = useEchartsTheme()
 let chart: ECharts | null = null
 
 function resize() {
   chart?.resize()
 }
 
-/** 高频 option 变更时用节流 + lazyUpdate，减少布局与绘制次数 */
 const applyOptionThrottled = throttle((opt: EChartsOption) => {
   if (!chart) return
   chart.setOption(opt, {
@@ -25,15 +29,20 @@ const applyOptionThrottled = throttle((opt: EChartsOption) => {
   })
 }, 80)
 
-onMounted(() => {
-  void nextTick(() => {
-    const el = hostRef.value
-    if (!el) return
-    chart = echarts.init(el)
-    chart.setOption(props.option, { lazyUpdate: false, notMerge: true })
-    window.addEventListener('resize', resize)
-  })
-})
+function mount() {
+  const el = hostRef.value
+  if (!el || chart) return
+  chart = echarts.init(el, themeName.value)
+  chart.setOption(props.option, { lazyUpdate: false, notMerge: true })
+}
+
+watch(
+  () => visible.value || props.lazy === false,
+  (v) => {
+    if (v) void nextTick(() => mount())
+  },
+  { immediate: true },
+)
 
 watch(
   () => props.option,
@@ -44,9 +53,17 @@ watch(
   { deep: true },
 )
 
+onThemeChange(() => {
+  try { chart?.dispose() } catch { /* noop */ }
+  chart = null
+  void nextTick(() => mount())
+})
+
+if (typeof window !== 'undefined') window.addEventListener('resize', resize)
+
 onBeforeUnmount(() => {
-  window.removeEventListener('resize', resize)
-  chart?.dispose()
+  if (typeof window !== 'undefined') window.removeEventListener('resize', resize)
+  try { chart?.dispose() } catch { /* noop */ }
   chart = null
 })
 </script>

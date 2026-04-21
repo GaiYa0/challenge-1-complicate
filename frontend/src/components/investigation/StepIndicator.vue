@@ -4,7 +4,7 @@ defineProps<{
   steps?: string[]
 }>()
 
-const defaultSteps = ['数据导入', '开始分析', '关系网络', '风险画像', '调查报告']
+const defaultSteps = ['数据导入', '数据清洗', '证据关系图', '证据链分析', '证据报告']
 </script>
 
 <template>

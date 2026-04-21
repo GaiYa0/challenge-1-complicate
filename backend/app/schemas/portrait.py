@@ -16,6 +16,24 @@ class PortraitBasicInfo(BaseModel):
     summary: str = ""
 
 
+class PortraitFundTxRow(BaseModel):
+    """单笔交易金额（二期逐笔明细，可选）。"""
+
+    amount: float = Field(description="单笔金额（元）")
+
+
+class PortraitFundLine(BaseModel):
+    """财付通按对手侧合并后的资金行（真实金额汇总）。"""
+
+    counterparty: str
+    amount: float = Field(description="汇入该对手账户的金额合计（元）")
+    tx_count: int = Field(0, description="对应交易笔数")
+    rows: list[PortraitFundTxRow] = Field(
+        default_factory=list,
+        description="可选：逐笔金额明细（有上限，防响应过大）",
+    )
+
+
 class PortraitEconomic(BaseModel):
     """经济状况"""
 
@@ -24,6 +42,14 @@ class PortraitEconomic(BaseModel):
     transfer_out_count: int = 0
     transfer_in_count: int = 0
     explain: str = ""
+    fund_only_evidence: bool = Field(
+        default=False,
+        description="本案仅财付通表格时 true，前端可只展示资金维度",
+    )
+    fund_counterparty_lines: list[PortraitFundLine] = Field(
+        default_factory=list,
+        description="按对手侧账户合并后的金额行；有数据时优先用于证据链展示",
+    )
 
 
 class TimelineBin(BaseModel):

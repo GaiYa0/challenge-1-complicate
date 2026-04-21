@@ -2,11 +2,15 @@
 :root {
   --app-primary: #1a365d;
   --app-primary-light: #e8edf4;
+  --app-primary-hover: #24477a;
   --app-bg-layout: #f5f6fa;
   --app-bg-card: #ffffff;
+  --app-bg-hover: #f3f4f6;
   --app-border: #dcdfe6;
+  --app-border-light: #eef0f3;
   --app-text: #1f2937;
   --app-text-secondary: #6b7280;
+  --app-text-placeholder: #9ca3af;
   --app-radius: 8px;
   --app-shadow-card: 0 1px 4px rgba(0, 21, 41, 0.08);
   --app-shadow-hover: 0 8px 24px rgba(0, 21, 41, 0.1);
@@ -15,8 +19,49 @@
   --app-danger: #dc2626;
   --app-success: #16a34a;
   --app-warning: #d97706;
+  --app-info: #0891b2;
 
   --el-color-primary: var(--app-primary);
+}
+
+/* ── 暗色主题：Element Plus 2.6+ 官方约定 `html.dark` ── */
+html.dark {
+  --app-primary: #3b82f6;
+  --app-primary-light: #1e293b;
+  --app-primary-hover: #60a5fa;
+  --app-bg-layout: #0f172a;
+  --app-bg-card: #111c2e;
+  --app-bg-hover: #1e293b;
+  --app-border: #1f2a3d;
+  --app-border-light: #1a2436;
+  --app-text: #e2e8f0;
+  --app-text-secondary: #94a3b8;
+  --app-text-placeholder: #64748b;
+  --app-shadow-card: 0 1px 4px rgba(0, 0, 0, 0.35);
+  --app-shadow-hover: 0 8px 24px rgba(0, 0, 0, 0.45);
+  --app-danger: #f87171;
+  --app-success: #4ade80;
+  --app-warning: #fbbf24;
+  --app-info: #22d3ee;
+
+  --el-color-primary: var(--app-primary);
+  --el-bg-color: var(--app-bg-card);
+  --el-bg-color-page: var(--app-bg-layout);
+  --el-bg-color-overlay: var(--app-bg-card);
+  --el-text-color-primary: var(--app-text);
+  --el-text-color-regular: var(--app-text);
+  --el-text-color-secondary: var(--app-text-secondary);
+  --el-text-color-placeholder: var(--app-text-placeholder);
+  --el-text-color-disabled: #475569;
+  --el-border-color: var(--app-border);
+  --el-border-color-light: var(--app-border-light);
+  --el-border-color-lighter: var(--app-border-light);
+  --el-fill-color: var(--app-bg-hover);
+  --el-fill-color-light: var(--app-bg-hover);
+  --el-fill-color-lighter: var(--app-bg-card);
+  --el-fill-color-blank: var(--app-bg-card);
+  --el-mask-color: rgba(0, 0, 0, 0.6);
+  color-scheme: dark;
 }
 
 *,
@@ -32,6 +77,7 @@ body {
   color: var(--app-text);
   background: var(--app-bg-layout);
   -webkit-font-smoothing: antialiased;
+  transition: background-color 0.22s ease, color 0.22s ease;
 }
 
 #app {
@@ -41,18 +87,114 @@ body {
   text-align: left;
 }
 
-/* 路由页切换：轻量淡入，避免闪屏 */
+/* ── 路由切换过渡（#18 动效克制） ── */
 .fade-slide-enter-active,
 .fade-slide-leave-active {
   transition: opacity 0.22s ease, transform 0.22s ease;
 }
-
 .fade-slide-enter-from {
   opacity: 0;
   transform: translateY(6px);
 }
-
 .fade-slide-leave-to {
   opacity: 0;
   transform: translateY(-4px);
+}
+
+/* ── 通用 pop-in（卡片/图表首屏） ── */
+.pop-in-enter-active {
+  transition: opacity 0.18s ease, transform 0.18s ease;
+}
+.pop-in-enter-from {
+  opacity: 0;
+  transform: translateY(4px);
+}
+
+/* ── prefers-reduced-motion：关闭所有非必要动效 ── */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* ── nprogress 全局样式（顶部进度条 #9） ── */
+#nprogress .bar {
+  background: var(--app-primary) !important;
+  height: 2px !important;
+}
+#nprogress .peg {
+  box-shadow: 0 0 10px var(--app-primary), 0 0 5px var(--app-primary) !important;
+}
+#nprogress .spinner-icon {
+  border-top-color: var(--app-primary) !important;
+  border-left-color: var(--app-primary) !important;
+}
+
+/* ── @media print：调查报告页的打印隔离 ── */
+@media print {
+  @page {
+    size: A4 portrait;
+    margin: 16mm 18mm;
+  }
+
+  body {
+    background: #ffffff !important;
+    color: #000000 !important;
+  }
+
+  /* 隐藏：侧栏、顶部栏、主菜单、所有按钮、进度条 */
+  .layout-aside,
+  .layout-header,
+  .el-menu,
+  .el-button,
+  .el-pagination,
+  .step-indicator,
+  .page-subtitle,
+  .report-actions,
+  .no-print,
+  #nprogress {
+    display: none !important;
+  }
+
+  .layout-main {
+    padding: 0 !important;
+    background: #ffffff !important;
+    min-height: 0 !important;
+  }
+
+  .report-document {
+    border: none !important;
+    box-shadow: none !important;
+    padding: 0 !important;
+    max-width: 100% !important;
+  }
+
+  .page-break {
+    page-break-before: always;
+  }
+
+  a[href]::after {
+    content: '';
+  }
+}
+
+/* ── 滚动条在暗色下保持一致观感 ── */
+html.dark ::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+html.dark ::-webkit-scrollbar-thumb {
+  background: #334155;
+  border-radius: 6px;
+}
+html.dark ::-webkit-scrollbar-thumb:hover {
+  background: #475569;
+}
+html.dark ::-webkit-scrollbar-track {
+  background: transparent;
 }

@@ -25,7 +25,7 @@ def create_graph_user_node(
     current_user: Annotated[User, Depends(require_role("admin"))],
     neo4j_driver: Driver = Depends(get_neo4j_driver),
 ):
-    graph_service.create_user_node(neo4j_driver, body.name)
+    graph_service.create_user_node(neo4j_driver, body.name, tenant_id=int(current_user.id))
     return success_for_request(request, None)
 
 
@@ -36,7 +36,13 @@ def create_graph_edge(
     current_user: Annotated[User, Depends(require_role("admin"))],
     neo4j_driver: Driver = Depends(get_neo4j_driver),
 ):
-    graph_service.create_edge(neo4j_driver, body.from_user, body.to_user)
+    graph_service.create_edge(
+        neo4j_driver,
+        body.from_user,
+        body.to_user,
+        tenant_id=int(current_user.id),
+        amount=body.amount,
+    )
     return success_for_request(request, None)
 
 
@@ -46,7 +52,7 @@ def list_graph_relations(
     current_user: Annotated[User, Depends(require_role("admin"))],
     neo4j_driver: Driver = Depends(get_neo4j_driver),
 ):
-    data = graph_service.list_relations(neo4j_driver)
+    data = graph_service.list_relations(neo4j_driver, tenant_id=int(current_user.id))
     return success_for_request(request, data)
 
 
@@ -56,5 +62,5 @@ def graph_out_degree(
     current_user: Annotated[User, Depends(require_role("admin"))],
     neo4j_driver: Driver = Depends(get_neo4j_driver),
 ):
-    data = graph_service.out_degree(neo4j_driver)
+    data = graph_service.out_degree(neo4j_driver, tenant_id=int(current_user.id))
     return success_for_request(request, data)
