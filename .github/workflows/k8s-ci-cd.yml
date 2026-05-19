@@ -59,17 +59,30 @@ jobs:
   deploy:
     needs: build-and-push
     runs-on: ubuntu-latest
-    if: |
-      (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master') &&
-      secrets.KUBE_CONFIG != ''
+    if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
     environment: production
     steps:
+      # job 级 if 不能使用 secrets 上下文，在 step 内检测后跳过
+      - name: Check KUBE_CONFIG
+        id: gate
+        env:
+          KUBE_CONFIG_B64: ${{ secrets.KUBE_CONFIG }}
+        run: |
+          if [ -z "$KUBE_CONFIG_B64" ]; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "::notice::KUBE_CONFIG 未配置，跳过 K8s 部署"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Setup kubectl
+        if: steps.gate.outputs.skip != 'true'
         uses: azure/setup-kubectl@v4
         with:
           version: v1.29.0
 
       - name: Deploy to Kubernetes
+        if: steps.gate.outputs.skip != 'true'
         env:
           KUBE_CONFIG_B64: ${{ secrets.KUBE_CONFIG }}
           IMAGE_REF: ${{ needs.build-and-push.outputs.image_sha }}
