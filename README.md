@@ -2,6 +2,20 @@
 
 全栈演示项目：**FastAPI** 后端（PostgreSQL、Redis、MinIO、Kafka、Neo4j、Celery）+ **Vue 3** 前端。支持 **Docker Compose** 本地/单机部署，以及 **Kubernetes + GitHub Actions** 持续交付。
 
+公开仓库：<https://github.com/GaiYa0/challenge-1-complicate>
+
+---
+
+## 业务功能（当前实现）
+
+- **案件与数据**：案件列表、MinIO 数据导入（CSV / XLS / XLSX）、分析任务与清洗流水。
+- **本案表格构图**：从「`dataset=case-{id}`」下的表格解析 `name / counterparty` 或 **财付通 TenpayTrades** 列（用户侧账号名称 → 对手侧账户名称），构建有向边；有金额列时对同向边汇总金额。
+- **证据关系图**：`/cases/:caseId/network` 同心圆视图；行为维度为 **资金往来**，边权使用接口返回的 **`weight`**（金额或笔数），与 G6 线宽联动。
+- **人物画像与证据链**：`/cases/:caseId/portraits` → 单人画像；纯财付通案件可标记 `fund_only_evidence`，按对手返回 **`fund_counterparty_lines`**（及可选逐笔 `rows`），证据链时间轴优先使用该汇总金额。
+- **Neo4j**：`User-[:TRANSFER]` 支持关系属性 **`amount`**；图分析/可视化边权按 `sum(coalesce(r.amount, 1.0))` 聚合（无 `amount` 的旧边等价于按条数计 1）。
+
+更完整的目标架构与数据湖说明见 [`docs/SYSTEM_ARCHITECTURE.md`](docs/SYSTEM_ARCHITECTURE.md)。
+
 ---
 
 ## 上线方式概览
@@ -18,6 +32,43 @@
 
 - **Docker**：Docker Engine 20+，且已安装 **Docker Compose V2**（`docker compose` 命令可用）
 - **（可选）本地前后端分离开发**：Node.js 20+、Python 3.10+、`pip` / `npm`
+- **Windows 一键运行**：安装 [Docker Desktop](https://www.docker.com/products/docker-desktop/) 后，使用下方「Windows 便携版」或 `ChallengeDemo.exe`
+
+---
+
+## Windows 便携版（.exe）
+
+本仓库可将全栈打成 **Windows 便携 ZIP**（内含 `ChallengeDemo.exe` + Docker 构建所需源码）。exe **不内嵌**数据库与服务，而是通过本机 **Docker Desktop** 拉起与 macOS/Linux 相同的 Compose 栈，保证功能一致。
+
+| 方式 | 说明 |
+|------|------|
+| **GitHub Releases** | 在 [Releases](https://github.com/GaiYa0/challenge-1-complicate/releases) 下载 `challenge-demo-windows-*.zip`，解压后双击 `ChallengeDemo.exe` |
+| **自行构建 exe** | 在 Windows 上于仓库根执行：`.\packaging\windows\build.ps1`（需 Python 3.10+），产物在 `dist\` |
+| **仅脚本（无 exe）** | `.\run\windows-start.ps1` / `.\run\windows-stop.ps1` |
+| **从 GitHub 克隆** | `git clone` 后安装 Docker Desktop，在项目根执行 `docker compose --env-file .env.dev up -d --build`，浏览器打开 <http://127.0.0.1:8080> |
+
+**CI 自动构建**：推送标签 `v*`（如 `v1.0.0`）、发布 GitHub Release，或手动运行 Actions 工作流 **windows-release**，会生成并上传上述 ZIP。
+
+详细说明见 [`packaging/windows/README-WINDOWS.txt`](packaging/windows/README-WINDOWS.txt)。
+
+### 推送到 GitHub 并发布 Windows 包
+
+```bash
+git init   # 若尚未初始化
+git add .
+git commit -m "Initial commit"
+git remote add origin https://github.com/<你的用户名>/<仓库名>.git
+git branch -M main
+git push -u origin main
+```
+
+发布 Windows 便携 ZIP 任选其一：
+
+1. **打标签**：`git tag v1.0.0 && git push origin v1.0.0` → 触发 Actions **windows-release**
+2. **GitHub Release**：在仓库 Releases 页创建版本并发布 → 自动上传 ZIP 到该 Release
+3. **手动构建**：仓库 **Actions** → **windows-release** → **Run workflow**，在 Artifacts 中下载 ZIP
+
+> **说明**：单个 `.exe` 作为启动器，依赖本机 Docker 拉起的完整服务栈；无法把 PostgreSQL / Neo4j 等全部打进一个无需 Docker 的 exe（体积与许可也不现实）。若需完全离线单机包，需另行裁剪架构（如 SQLite + 内嵌 Redis），与当前生产栈不同。
 
 ---
 

@@ -108,6 +108,29 @@ function statusClass(status: string): string {
 
         <transition name="slide-down">
           <div v-if="expandedEntries.has(entry.action.id)" class="timeline-detail">
+            <div v-if="entry.fundTxRows?.length" class="detail-section">
+              <h4 class="detail-title">逐笔转账</h4>
+              <p
+                v-if="entry.fundLineTxCount != null && entry.fundTxRows && entry.fundLineTxCount > entry.fundTxRows.length"
+                class="fund-tx-capped-hint"
+              >
+                汇总共 {{ entry.fundLineTxCount }} 笔；下列为后端返回的逐笔（受条数上限，已截断）。
+              </p>
+              <div class="fund-tx-header">
+                <span>时间</span>
+                <span>金额（元）</span>
+              </div>
+              <div class="fund-tx-scroll">
+                <div
+                  v-for="(row, idx) in entry.fundTxRows"
+                  :key="`ftx-${entry.action.id}-${idx}`"
+                  class="fund-tx-row"
+                >
+                  <span class="fund-tx-time">{{ formatTime((row.time && String(row.time)) || '') }}</span>
+                  <span class="fund-tx-amt">{{ row.amount.toLocaleString('zh-CN', { maximumFractionDigits: 2 }) }}</span>
+                </div>
+              </div>
+            </div>
             <div class="detail-section">
               <h4 class="detail-title">证据材料</h4>
               <div
@@ -276,6 +299,52 @@ function statusClass(status: string): string {
 }
 .detail-section { margin-bottom: 14px; }
 .detail-section:last-child { margin-bottom: 0; }
+.fund-tx-capped-hint {
+  font-size: 12px;
+  color: var(--app-text-secondary);
+  margin: 0 0 8px;
+  line-height: 1.4;
+}
+.fund-tx-header {
+  display: flex;
+  justify-content: space-between;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--app-text-secondary);
+  padding: 6px 10px 4px;
+  border-bottom: 1px solid var(--app-border);
+}
+.fund-tx-header span:first-child { flex: 1; min-width: 0; }
+.fund-tx-header span:last-child { flex-shrink: 0; text-align: right; margin-left: 12px; }
+.fund-tx-scroll {
+  max-height: 280px;
+  overflow-y: auto;
+  border: 1px solid var(--app-border);
+  border-radius: 6px;
+  background: var(--app-bg-layout);
+}
+.fund-tx-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 12px;
+  font-size: 13px;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--app-border);
+}
+.fund-tx-row:last-child { border-bottom: none; }
+.fund-tx-time {
+  font-variant-numeric: tabular-nums;
+  color: var(--app-text);
+  min-width: 0;
+  flex: 1;
+}
+.fund-tx-amt {
+  font-weight: 600;
+  color: #dc2626;
+  font-variant-numeric: tabular-nums;
+  flex-shrink: 0;
+}
 .detail-title {
   font-size: 13px;
   font-weight: 600;

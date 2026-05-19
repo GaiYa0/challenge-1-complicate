@@ -25,6 +25,7 @@ from backend.app.schemas.graph import (
     GraphVisualizationNode,
 )
 from backend.app.services import graph_controlled_service, tenpay_graph
+from backend.app.services import tabular_fund_extract
 from backend.app.services.file_service import read_tabular_bytes_to_dataframe
 
 logger = logging.getLogger(__name__)
@@ -286,19 +287,39 @@ MAX_FUND_TX_ROWS_PER_COUNTERPARTY = 400
 MAX_FUND_TX_ROWS_TOTAL = 2000
 
 
-def _cap_fund_tx_rows(rows_by_cp: dict[str, list[float]]) -> dict[str, list[float]]:
-    """逐笔金额：每对手上限 + 全局上限。"""
+def _earliest_latest_from_tuples(
+    items: list[tuple[float, str | None]],
+) -> tuple[str | None, str | None]:
+    times = [t for _, t in items if t]
+    if not times:
+        return None, None
+    dts: list[tuple[pd.Timestamp, str]] = []
+    for t in times:
+        dt = pd.to_datetime(t, errors="coerce")
+        if pd.isna(dt):
+            continue
+        dts.append((dt, t))
+    if not dts:
+        return min(times, key=str), max(times, key=str)
+    dts.sort(key=lambda x: x[0])
+    return dts[0][1], dts[-1][1]
+
+
+def _cap_fund_tx_rows(
+    rows_by_cp: dict[str, list[tuple[float, str | None]]],
+) -> dict[str, list[tuple[float, str | None]]]:
+    """逐笔 (金额, 时间)：每对手上限 + 全局上限。"""
     per_cp = {
         k: v[:MAX_FUND_TX_ROWS_PER_COUNTERPARTY] for k, v in rows_by_cp.items()
     }
-    out: dict[str, list[float]] = {}
+    out: dict[str, list[tuple[float, str | None]]] = {}
     n = 0
-    for cp in sorted(per_cp.keys(), key=lambda c: -sum(per_cp[c])):
-        chunk: list[float] = []
-        for a in per_cp[cp]:
+    for cp in sorted(per_cp.keys(), key=lambda c: -sum(p[0] for p in per_cp[c])):
+        chunk: list[tuple[float, str | None]] = []
+        for item in per_cp[cp]:
             if n >= MAX_FUND_TX_ROWS_TOTAL:
                 break
-            chunk.append(a)
+            chunk.append(item)
             n += 1
         if chunk:
             out[cp] = chunk
@@ -314,13 +335,19 @@ def aggregate_tenpay_fund_lines_for_person(
     tenant_user_id: int,
     case_id: int,
     person_id: str,
-) -> tuple[list[tuple[str, float, int]], dict[str, list[float]]]:
+) -> tuple[
+    list[tuple[str, float, int]],
+    dict[str, list[tuple[float, str | None]]],
+    dict[str, tuple[str | None, str | None]],
+]:
     """
-    跨本案所有 TenpayTrades 文件，按对手侧账户名称合并金额与笔数；
-    同时合并逐笔金额列表（有金额列时），并做上限截断。
+    跨本案表格文件，按对手合并金额、笔数与逐笔 (金额, 文档时间)：
+    - 财付通 TenpayTrades 适配表走 tenpay 解析；
+    - 其他 CSV/XLSX 在能识别 用户/对手/金额/（时间） 列时走 tabular_fund_extract，与上结构一致。
+    并做上限截断；返回每对手全量数据的最早/最晚时间。
     """
     merged: dict[str, list[float | int]] = defaultdict(lambda: [0.0, 0])
-    merged_rows: dict[str, list[float]] = defaultdict(list)
+    merged_rows: dict[str, list[tuple[float, str | None]]] = defaultdict(list)
     files = file_repo.list_tabular_files_for_case_dataset(
         db, tenant_user_id=tenant_user_id, case_id=case_id
     )
@@ -329,22 +356,39 @@ def aggregate_tenpay_fund_lines_for_person(
         try:
             raw = minio_ops.get_bytes(minio, f.bucket_name, f.object_name)
             df = read_tabular_bytes_to_dataframe(fn, raw)
-            if not tenpay_graph.should_use_tenpay_trades_adapter(fn, df):
+            if tenpay_graph.is_tenpay_reginfo_file(fn):
                 continue
-            agg_rows, rows_dict = tenpay_graph.tenpay_counterparty_agg_and_row_amounts(
-                df, person_id
-            )
+            if tenpay_graph.should_use_tenpay_trades_adapter(fn, df):
+                agg_rows, rows_dict = tenpay_graph.tenpay_counterparty_agg_and_row_amounts(
+                    df, person_id
+                )
+            else:
+                alt = tabular_fund_extract.try_generic_fund_aggregation(
+                    df, person_id, log_ctx=fn
+                )
+                if alt is None:
+                    continue
+                agg_rows, rows_dict = alt
+                if agg_rows:
+                    logger.info(
+                        "case_fund_lines_adapter kind=generic_tabular filename=%s lines=%s",
+                        fn,
+                        len(agg_rows),
+                    )
             for cp, amt, cnt in agg_rows:
                 merged[cp][0] += amt
                 merged[cp][1] += cnt
-            for cp, amts in rows_dict.items():
-                merged_rows[cp].extend(amts)
+            for cp, pairs in rows_dict.items():
+                merged_rows[cp].extend(pairs)
         except Exception:
             logger.exception("case_tenpay_fund_lines_failed filename=%s", fn)
     out = [(k, float(v[0]), int(v[1])) for k, v in merged.items()]
     out.sort(key=lambda x: (-x[1], x[0]))
+    time_bounds: dict[str, tuple[str | None, str | None]] = {
+        cp: _earliest_latest_from_tuples(merged_rows[cp]) for cp in merged_rows
+    }
     row_map = _cap_fund_tx_rows(dict(merged_rows))
-    return out, row_map
+    return out, row_map, time_bounds
 
 
 def _clip_viz(

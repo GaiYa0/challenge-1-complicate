@@ -179,7 +179,7 @@ def get_person_portrait(
                 db, minio, tenant_user_id=tid, case_id=case_id, person_id=person_id
             )
         )
-        fund_lines_raw, fund_tx_rows_map = (
+        fund_lines_raw, fund_tx_rows_map, fund_time_bounds = (
             case_graph_service.aggregate_tenpay_fund_lines_for_person(
                 db, minio, tenant_user_id=tid, case_id=case_id, person_id=person_id
             )
@@ -202,7 +202,8 @@ def get_person_portrait(
             "总交易额由 Neo4j 转出/转入边数结合稳定算法估算；异常比例为高风险线索数占比。"
         )
         fund_lines_raw = []
-        fund_tx_rows_map: dict[str, list[float]] = {}
+        fund_tx_rows_map: dict[str, list[tuple[float, str | None]]] = {}
+        fund_time_bounds: dict[str, tuple[str | None, str | None]] = {}
 
     edge_hint = out_c + in_c
     mock_hint: int | None = None
@@ -273,6 +274,7 @@ def get_person_portrait(
             risk_level=_cat(r.risk_level),
             risk_score=float(r.risk_score),
             category=_cat(r.category),
+            created_at=r.created_at.isoformat() if getattr(r, "created_at", None) else None,
         )
         for r in rows
     ]
@@ -309,9 +311,14 @@ def get_person_portrait(
                     counterparty=c,
                     amount=round(a, 2),
                     tx_count=n,
+                    earliest_time=fund_time_bounds.get(c, (None, None))[0],
+                    latest_time=fund_time_bounds.get(c, (None, None))[1],
                     rows=[
-                        PortraitFundTxRow(amount=round(x, 2))
-                        for x in fund_tx_rows_map.get(c, [])
+                        PortraitFundTxRow(
+                            amount=round(amt, 2),
+                            time=tstr,
+                        )
+                        for amt, tstr in fund_tx_rows_map.get(c, [])
                     ],
                 )
                 for c, a, n in fund_lines_raw

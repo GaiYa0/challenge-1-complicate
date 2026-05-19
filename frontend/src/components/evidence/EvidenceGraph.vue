@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { Graph, NodeEvent } from '@antv/g6'
 import type { IEvent, IPointerEvent, Node as G6Node, NodeData, EdgeData } from '@antv/g6'
-import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import type { EvidenceGraphData, EvidenceNodeKind, ActionType } from '../../types/evidence'
 import { NODE_KIND_COLORS } from '../../types/evidence'
 
@@ -11,7 +11,7 @@ const SUSPECT_SIZE = 56
 const BEHAVIOR_SIZE = 36
 const EVIDENCE_SIZE = 22
 const MAX_EV_PER_BEHAVIOR = 5
-const RENDER_CAP = 120
+/** 行为节点全量入布局（不截断；由 Portrait 按对手汇总控制规模） */
 const OVERLAP_MIN = 20
 
 const props = withDefaults(
@@ -62,8 +62,54 @@ function sig(d: EvidenceGraphData | null, ft: string, pi: number): string {
   return `${d.nodes.length}:${d.edges.length}:${ft}:${pi}`
 }
 
+/** 按边 actionType 选边，再沿图扩张闭包，保证 嫌疑人→行为→证据 整链保留 */
+function filterGraphByActionType(
+  data: EvidenceGraphData,
+  ft: ActionType | 'all',
+): EvidenceGraphData {
+  if (ft === 'all') return data
+  const seed = new Set<string>()
+  for (const e of data.edges) {
+    if (e.actionType === ft) {
+      seed.add(e.source)
+      seed.add(e.target)
+    }
+  }
+  if (seed.size === 0) {
+    return {
+      nodes: data.nodes.filter((n) => n.kind === 'suspect'),
+      edges: [],
+    }
+  }
+  const ri = new Set(seed)
+  let prev = -1
+  while (ri.size !== prev) {
+    prev = ri.size
+    for (const e of data.edges) {
+      if (ri.has(e.source) || ri.has(e.target)) {
+        ri.add(e.source)
+        ri.add(e.target)
+      }
+    }
+  }
+  return {
+    nodes: data.nodes.filter((n) => ri.has(n.id)),
+    edges: data.edges.filter((e) => ri.has(e.source) && ri.has(e.target)),
+  }
+}
+
+const graphDisplayState = computed(() => {
+  if (!props.data || props.data.nodes.length === 0) return 'no-input' as const
+  const hasAnyAction = props.data.nodes.some((n) => n.kind === 'action')
+  if (!hasAnyAction) return 'no-input' as const
+  if (props.filterType === 'all') return 'ok' as const
+  const f = filterGraphByActionType(props.data, props.filterType)
+  if (!f.nodes.some((n) => n.kind === 'action')) return 'filter-empty' as const
+  return 'ok' as const
+})
+
 function buildClusters(data: EvidenceGraphData): BehaviorCluster[] {
-  const behaviors = data.nodes.filter((n) => n.kind === 'action').slice(0, RENDER_CAP)
+  const behaviors = data.nodes.filter((n) => n.kind === 'action')
   return behaviors.map((b, i) => {
     const allEvIds: string[] = []
     for (const edge of data.edges) {
@@ -86,8 +132,9 @@ function radialPositions(
   const pos = new Map<string, { x: number; y: number }>()
   const N = Math.max(1, clusters.length)
   const totalNodes = data.nodes.length
-  const r1 = totalNodes > 120 ? R1 * 0.8 : R1
-  const r2 = totalNodes > 120 ? R2 * 0.85 : R2
+  const rScale = N > 40 ? 1 + Math.min(0.9, (N - 40) * 0.012) : 1
+  const r1 = R1 * rScale * (totalNodes > 120 ? 0.8 : 1)
+  const r2 = R2 * rScale * (totalNodes > 120 ? 0.85 : 1)
 
   for (const s of data.nodes.filter((n) => n.kind === 'suspect')) {
     pos.set(s.id, { x: cx, y: cy })
@@ -209,28 +256,23 @@ function clearHighlight() {
 }
 
 async function mountGraph() {
-  const el = containerRef.value
-  if (!el || props.loading || !props.data || props.data.nodes.length === 0) {
+  if (props.loading || !props.data || props.data.nodes.length === 0) {
     destroyGraph(); lastSig = ''; return
   }
-  const s = sig(props.data, props.filterType, props.playbackIndex)
+  const s = sig(props.data, String(props.filterType), props.playbackIndex)
   if (s === lastSig && graph && !graph.destroyed) return
   lastSig = s
   destroyGraph()
 
-  const filteredData = props.filterType === 'all' ? props.data : (() => {
-    const va = new Set<string>()
-    for (const e of props.data.edges) { if (e.actionType === props.filterType) va.add(e.source) }
-    const ri = new Set<string>()
-    props.data.nodes.filter((n) => n.kind === 'suspect').forEach((n) => ri.add(n.id))
-    for (const e of props.data.edges) {
-      if (va.has(e.source) || va.has(e.target)) { ri.add(e.source); ri.add(e.target) }
-    }
-    return {
-      nodes: props.data.nodes.filter((n) => ri.has(n.id)),
-      edges: props.data.edges.filter((e) => ri.has(e.source) && ri.has(e.target)),
-    }
-  })()
+  if (graphDisplayState.value !== 'ok') {
+    return
+  }
+
+  await nextTick()
+  const el = containerRef.value
+  if (!el) return
+
+  const filteredData = filterGraphByActionType(props.data, props.filterType)
 
   const clusters = buildClusters(filteredData)
   const playbackCutoff = props.playbackIndex >= 0 ? props.playbackIndex : clusters.length
@@ -283,7 +325,18 @@ async function mountGraph() {
 
   for (const sId of suspectIds) {
     for (const cl of visClusters) {
-      rawEdges.push({ id: `e-s-${sId}-${cl.behaviorId}`, source: sId, target: cl.behaviorId, data: { label: '', edgeType: 'main' } })
+      const orig = filteredData.edges.find((e) => e.source === sId && e.target === cl.behaviorId)
+      rawEdges.push({
+        id: `e-s-${sId}-${cl.behaviorId}`,
+        source: sId,
+        target: cl.behaviorId,
+        data: {
+          label: orig?.label ?? '',
+          actionType: orig?.actionType,
+          edgeType: 'main',
+          weight: typeof orig?.weight === 'number' ? orig.weight : undefined,
+        },
+      })
     }
   }
   for (let i = 0; i < visClusters.length - 1; i++) {
@@ -369,11 +422,20 @@ async function mountGraph() {
         const isTL = et === 'timeline'
         const secW = d?.weight
         const color = isTL ? '#94a3b8' : at === 'fund' ? '#dc2626' : at === 'call' ? '#ea580c' : at === 'trip' ? '#2563eb' : isMain ? '#475569' : '#94a3b8'
+        const mainFundLine =
+          isMain && at === 'fund' && secW != null && secW > 0
+            ? Math.min(5, 1.2 + Math.log10(1 + secW) * 0.75)
+            : null
         const secLine =
-          isMain ? 2
-          : isTL ? 1.5
-          : secW != null && secW > 0 ? Math.min(6, 1 + Math.log10(1 + secW) * 1.2)
-          : 1
+          mainFundLine != null
+            ? mainFundLine
+            : isMain
+              ? 2
+              : isTL
+                ? 1.5
+                : secW != null && secW > 0
+                  ? Math.min(6, 1 + Math.log10(1 + secW) * 1.2)
+                  : 1
         return {
           stroke: color,
           lineWidth: secLine,
@@ -445,12 +507,19 @@ defineExpose({ highlightCluster, clearHighlight })
       <span class="rl-item"><span class="rl-dot" style="background:#dc2626" /> 嫌疑人（中心）</span>
       <span class="rl-item"><span class="rl-dot" style="background:#2563eb" /> 行为（内环）</span>
       <span class="rl-item"><span class="rl-dot" style="background:#ca8a04" /> 证据（外环）</span>
+      <span class="rl-hint">滚轮缩放、拖移画布</span>
     </div>
     <div class="canvas-wrap" v-loading="loading">
       <div v-if="!data || data.nodes.length === 0" class="empty-canvas">
         暂无证据关系数据
       </div>
-      <div v-show="data && data.nodes.length > 0" ref="containerRef" class="canvas" />
+      <div v-else-if="graphDisplayState === 'filter-empty'" class="empty-canvas">
+        当前筛选下暂无关系
+      </div>
+      <div v-else-if="graphDisplayState === 'no-input'" class="empty-canvas">
+        暂无证据关系数据
+      </div>
+      <div v-else ref="containerRef" class="canvas" />
     </div>
   </div>
 </template>
@@ -462,6 +531,7 @@ defineExpose({ highlightCluster, clearHighlight })
   margin-bottom: 10px; font-size: 12px; color: var(--app-text-secondary);
 }
 .rl-item { display: flex; align-items: center; gap: 5px; }
+.rl-hint { margin-left: auto; font-size: 11px; color: var(--app-text-secondary); opacity: 0.9; }
 .rl-dot { width: 10px; height: 10px; border-radius: 50%; }
 .canvas-wrap { min-height: 640px; position: relative; }
 .canvas {

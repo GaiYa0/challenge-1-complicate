@@ -12,12 +12,17 @@ export interface PortraitBasicInfo {
 
 export interface PortraitFundTxRow {
   amount: number
+  /** 表格解析出的交易/单据时间 */
+  time?: string | null
 }
 
 export interface PortraitFundLine {
   counterparty: string
   amount: number
   tx_count: number
+  /** 该对手下已解析的最早/最晚时间（合并行展示与排序用） */
+  earliest_time?: string | null
+  latest_time?: string | null
   /** 可选逐笔明细（后端有上限） */
   rows?: PortraitFundTxRow[]
 }
@@ -65,6 +70,8 @@ export interface PortraitClueItem {
   risk_level: string
   risk_score: number
   category: string
+  /** 线索入库时间 */
+  created_at?: string | null
 }
 
 export interface PersonPortrait {

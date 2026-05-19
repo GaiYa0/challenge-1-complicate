@@ -51,12 +51,22 @@ export interface Suspect {
   summary: string
 }
 
+/** 按对手合并时附带的逐笔（来自 portrait fund_counterparty_lines.rows） */
+export interface FundTxRowLite {
+  amount: number
+  time?: string | null
+}
+
 /** 证据链条目（时间轴用） */
 export interface EvidenceChainEntry {
   time: string
   action: EvidenceAction
   evidences: Evidence[]
   relatedPersons: RelatedPerson[]
+  /** 仅资金合并行：展开区展示逐笔用 */
+  fundTxRows?: FundTxRowLite[]
+  /** 对方合并行的交易笔数（与 fundTxRows 长度对比以决定是否提示截断） */
+  fundLineTxCount?: number
 }
 
 /** 证据链 */

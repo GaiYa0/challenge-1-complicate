@@ -17,9 +17,12 @@ class PortraitBasicInfo(BaseModel):
 
 
 class PortraitFundTxRow(BaseModel):
-    """单笔交易金额（二期逐笔明细，可选）。"""
+    """单笔交易（金额 + 文档时间，可选）。"""
 
     amount: float = Field(description="单笔金额（元）")
+    time: str | None = Field(
+        default=None, description="表格解析到的交易/单据时间（ISO 子串）"
+    )
 
 
 class PortraitFundLine(BaseModel):
@@ -28,6 +31,12 @@ class PortraitFundLine(BaseModel):
     counterparty: str
     amount: float = Field(description="汇入该对手账户的金额合计（元）")
     tx_count: int = Field(0, description="对应交易笔数")
+    earliest_time: str | None = Field(
+        default=None, description="该对手下已解析的最早时间"
+    )
+    latest_time: str | None = Field(
+        default=None, description="该对手下已解析的最晚时间"
+    )
     rows: list[PortraitFundTxRow] = Field(
         default_factory=list,
         description="可选：逐笔金额明细（有上限，防响应过大）",
@@ -90,6 +99,9 @@ class PortraitClueItem(BaseModel):
     risk_level: str
     risk_score: float = Field(ge=0, le=100)
     category: str = "general"
+    created_at: str | None = Field(
+        default=None, description="线索入库时间（ISO 8601）"
+    )
 
 
 class PersonPortraitOut(BaseModel):

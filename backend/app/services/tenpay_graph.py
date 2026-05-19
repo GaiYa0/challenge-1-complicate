@@ -12,6 +12,12 @@ from collections import defaultdict
 
 import pandas as pd
 
+from backend.app.services.tabular_fund_extract import (
+    counterparty_agg_and_row_amounts_for_columns,
+    pick_amount_column,
+    pick_time_column,
+)
+
 def _norm_key(c: object) -> str:
     return str(c).strip().lower()
 
@@ -43,7 +49,7 @@ def edges_from_tenpay_trades(df: pd.DataFrame) -> list[tuple[str, str, float]]:
     cp_col = cmap.get("对手侧账户名称")
     if not name_col or not cp_col:
         return []
-    amt_col = _pick_amount_column(df)
+    amt_col = pick_amount_column(df)
     if amt_col is None:
         agg: dict[tuple[str, str], int] = defaultdict(int)
         for _, row in df.iterrows():
@@ -74,32 +80,6 @@ def should_use_tenpay_trades_adapter(filename: str, df: pd.DataFrame) -> bool:
     return is_tenpay_trades_file(filename) or _has_tenpay_trades_columns(df)
 
 
-# 与 normalization_engine 常见列名对齐，用于画像金额汇总
-_AMOUNT_NAME_CANDIDATES: tuple[str, ...] = (
-    "交易金额",
-    "金额",
-    "发生金额",
-    "订单金额",
-    "转账金额",
-    "借方金额",
-    "贷方金额",
-)
-
-
-def _pick_amount_column(df: pd.DataFrame) -> str | None:
-    cmap = _norm_col_map(df)
-    for cand in _AMOUNT_NAME_CANDIDATES:
-        if cand in cmap:
-            return cmap[cand]
-    for col in df.columns:
-        k = _norm_key(col)
-        if "金额" in k:
-            return str(col)
-        if "amount" in k:
-            return str(col)
-    return None
-
-
 def tenpay_amount_row_stats_for_person(df: pd.DataFrame, person_id: str) -> tuple[float, int, bool]:
     """
     按「用户侧账号名称」匹配 person，汇总金额列并统计行数。
@@ -109,7 +89,7 @@ def tenpay_amount_row_stats_for_person(df: pd.DataFrame, person_id: str) -> tupl
     name_col = cmap.get("用户侧账号名称")
     if not name_col:
         return 0.0, 0, False
-    amt_col = _pick_amount_column(df)
+    amt_col = pick_amount_column(df)
     has_amount_col = amt_col is not None
     pid = (person_id or "").strip()
     if not pid:
@@ -144,7 +124,7 @@ def tenpay_amount_by_counterparty_for_person(
     cp_col = cmap.get("对手侧账户名称")
     if not name_col or not cp_col:
         return []
-    amt_col = _pick_amount_column(df)
+    amt_col = pick_amount_column(df)
     if amt_col is None:
         return []
     pid = (person_id or "").strip()
@@ -173,9 +153,12 @@ def tenpay_amount_by_counterparty_for_person(
 
 def tenpay_counterparty_agg_and_row_amounts(
     df: pd.DataFrame, person_id: str
-) -> tuple[list[tuple[str, float, int]], dict[str, list[float]]]:
+) -> tuple[
+    list[tuple[str, float, int]],
+    dict[str, list[tuple[float, str | None]]],
+]:
     """
-    与按对手汇总一致，并附带每笔金额列表（同对手多笔）。
+    与按对手汇总一致，并附带逐笔 (金额, 文档时间)（同对手多笔）。
     无金额列时返回 ([], {})。
     """
     cmap = _norm_col_map(df)
@@ -183,30 +166,10 @@ def tenpay_counterparty_agg_and_row_amounts(
     cp_col = cmap.get("对手侧账户名称")
     if not name_col or not cp_col:
         return [], {}
-    amt_col = _pick_amount_column(df)
+    amt_col = pick_amount_column(df)
     if amt_col is None:
         return [], {}
-    pid = (person_id or "").strip()
-    if not pid:
-        return [], {}
-    agg: dict[str, list] = defaultdict(lambda: [0.0, 0])
-    rows_by_cp: dict[str, list[float]] = defaultdict(list)
-    for _, row in df.iterrows():
-        if str(row[name_col]).strip() != pid:
-            continue
-        cp = str(row[cp_col]).strip() if pd.notna(row[cp_col]) else ""
-        if not cp or cp == pid:
-            continue
-        v = row[amt_col]
-        if pd.isna(v):
-            continue
-        try:
-            amt = float(v)
-        except (TypeError, ValueError):
-            continue
-        agg[cp][0] += amt
-        agg[cp][1] += 1
-        rows_by_cp[cp].append(amt)
-    out = [(k, float(v[0]), int(v[1])) for k, v in agg.items()]
-    out.sort(key=lambda x: (-x[1], x[0]))
-    return out, dict(rows_by_cp)
+    tcol = pick_time_column(df)
+    return counterparty_agg_and_row_amounts_for_columns(
+        df, person_id, name_col, cp_col, amt_col, tcol, log_ctx="tenpay"
+    )

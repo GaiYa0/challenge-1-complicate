@@ -1,0 +1,71 @@
+# 构建 Windows 便携包：ChallengeDemo.exe + Docker 源码 ZIP
+# 触发：发布 Release、手动 workflow_dispatch、推送 v* 标签
+name: windows-release
+
+on:
+  release:
+    types: [published]
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-windows-bundle:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Build ChallengeDemo.exe
+        shell: pwsh
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r packaging/windows/requirements-build.txt
+          pyinstaller --noconfirm --clean packaging/windows/challenge-demo.spec
+          if (-not (Test-Path dist/ChallengeDemo.exe)) {
+            throw "ChallengeDemo.exe not found"
+          }
+
+      - name: Stage portable ZIP
+        shell: pwsh
+        run: |
+          $version = "${{ github.ref_name }}"
+          if ($version -eq "${{ github.ref }}" -or $version -eq "main" -or $version -eq "master") {
+            $version = "dev-${{ github.sha }}"
+          }
+          & packaging/windows/stage-release.ps1 -ExePath dist/ChallengeDemo.exe -Version $version
+
+      - name: Collect artifact name
+        id: zip
+        shell: pwsh
+        run: |
+          $zip = Get-ChildItem -Path dist -Filter "challenge-demo-windows-*.zip" | Select-Object -First 1
+          if (-not $zip) { throw "ZIP not found under dist/" }
+          echo "path=$($zip.FullName)" >> $env:GITHUB_OUTPUT
+          echo "name=$($zip.Name)" >> $env:GITHUB_OUTPUT
+
+      - name: Upload workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.zip.outputs.name }}
+          path: dist/challenge-demo-windows-*.zip
+          if-no-files-found: error
+
+      - name: Upload to GitHub Release
+        if: github.event_name == 'release'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/challenge-demo-windows-*.zip
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

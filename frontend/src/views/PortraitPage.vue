@@ -29,6 +29,51 @@ import type {
 } from '../types/evidence'
 import { ACTION_TYPE_LABELS } from '../types/evidence'
 
+type SortFundBy = 'time' | 'amount'
+
+function timeSortValue(ts: string): number | null {
+  if (!ts) return null
+  const s = ts.includes('T') ? ts : ts.replace(' ', 'T')
+  const t = Date.parse(s)
+  return Number.isNaN(t) ? null : t
+}
+
+function sortEvidenceEntries(list: EvidenceChainEntry[], by: SortFundBy): void {
+  if (by === 'amount') {
+    list.sort((a, b) => (b.action.amount ?? 0) - (a.action.amount ?? 0))
+  } else {
+    list.sort((a, b) => {
+      const va = timeSortValue(a.time)
+      const vb = timeSortValue(b.time)
+      if (va === null && vb === null) return 0
+      if (va === null) return 1
+      if (vb === null) return -1
+      return va - vb
+    })
+  }
+}
+
+/** 与 fund_counterparty 某行对应的、时间轴上按时间升序首条（用于汇总图谱节点点击） */
+function firstTimelineActionIdForFundLine(
+  chain: EvidenceChainEntry[],
+  person: string,
+  counterparty: string,
+): string | null {
+  const label = `${person} → ${counterparty}`.trim()
+  const candidates = chain.filter(
+    (e) => e.action.type === 'fund' && e.action.label.trim() === label,
+  )
+  if (candidates.length === 0) return null
+  const scored = candidates.map((e) => ({ e, t: timeSortValue(e.time) }))
+  scored.sort((a, b) => {
+    if (a.t === null && b.t === null) return 0
+    if (a.t === null) return 1
+    if (b.t === null) return -1
+    return a.t - b.t
+  })
+  return scored[0].e.action.id
+}
+
 const route = useRoute()
 const router = useRouter()
 const caseStore = useCaseStore()
@@ -43,6 +88,8 @@ const hasData = computed(() => fileStore.items.length > 0)
 
 const filterType = ref<ActionType | 'all'>('all')
 const filterPerson = ref('')
+const mergeFundByCounterparty = ref(false)
+const sortFundBy = ref<SortFundBy>('time')
 const panelVisible = ref(false)
 const selectedEvidence = ref<Evidence | null>(null)
 
@@ -88,6 +135,8 @@ const evidenceChainEntries = computed<EvidenceChainEntry[]>(() => {
   const fundOnly = economic.fund_only_evidence === true
   const fundClueCount = clues.filter((c) => c.category === 'fund').length
   const social = portrait.value.social
+  const mergeFund = mergeFundByCounterparty.value
+  const sortBy = sortFundBy.value
 
   const pushRelatedForEvidence = (actionType: ActionType, evId: string) => {
     const relatedPersons: RelatedPerson[] = []
@@ -117,39 +166,116 @@ const evidenceChainEntries = computed<EvidenceChainEntry[]>(() => {
   if (fundLines.length > 0) {
     let i = 0
     for (const line of fundLines) {
-      i += 1
-      const evId = `ev-fund-cp-${i}`
-      const actionId = `action-fund-cp-${i}`
-      const time = portrait.value.basic_info?.summary?.includes('2024') ? '2024-01-01' : new Date().toISOString().slice(0, 10)
-      const action: EvidenceAction = {
-        id: actionId,
-        type: 'fund',
-        label: `${personId.value} → ${line.counterparty}`,
-        time,
-        description: `共 ${line.tx_count} 笔交易（对手侧账户合并汇总）`,
-        amount: line.amount,
+      const rows = line.rows ?? []
+      if (mergeFund) {
+        i += 1
+        const evId = `ev-fund-cp-${i}`
+        const actionId = `action-fund-cp-${i}`
+        const time = line.earliest_time || line.latest_time || ''
+        const hasRange = Boolean(
+          line.earliest_time
+          && line.latest_time
+          && line.earliest_time !== line.latest_time,
+        )
+        const action: EvidenceAction = {
+          id: actionId,
+          type: 'fund',
+          label: `${personId.value} → ${line.counterparty}`,
+          time,
+          description: hasRange
+            ? `共 ${line.tx_count} 笔，文档时间约 ${line.earliest_time} ～ ${line.latest_time}（按对手合并）`
+            : `共 ${line.tx_count} 笔交易（按对手侧账户合并汇总）`,
+          amount: line.amount,
+        }
+        const rowPreview = rows.length
+          ? `\n逐笔明细(前若干笔，含时间): ${rows.slice(0, 8).map((r) => `${r.amount}${r.time ? `@${r.time}` : ''}`).join('； ')}${rows.length > 8 ? '…' : ''}`
+          : ''
+        const evidences: Evidence[] = [{
+          id: evId,
+          actionId,
+          source: '资金往来系统',
+          sourceType: 'fund',
+          recordId: `FUND-CP-${i}`,
+          ruleHit: '对手侧账户汇总',
+          rawContent: `对手: ${line.counterparty}\n金额: ${line.amount}\n笔数: ${line.tx_count}${rowPreview}`,
+          remark: '',
+          status: 'pending',
+          time: action.time,
+        }]
+        entries.push({
+          time: action.time,
+          action,
+          evidences,
+          relatedPersons: pushRelatedForEvidence('fund', evId),
+          fundTxRows: rows.length > 0 ? rows.map((r) => ({ amount: r.amount, time: r.time })) : undefined,
+          fundLineTxCount: line.tx_count,
+        })
+      } else if (rows.length > 0) {
+        for (let j = 0; j < rows.length; j += 1) {
+          i += 1
+          const r = rows[j]
+          const t = (r.time && String(r.time)) || ''
+          const evId = `ev-fund-cp-${i}-r${j}`
+          const actionId = `action-fund-cp-${i}-r${j}`
+          const action: EvidenceAction = {
+            id: actionId,
+            type: 'fund',
+            label: `${personId.value} → ${line.counterparty}`,
+            time: t,
+            description: `单笔 ${r.amount.toLocaleString()} 元（逐笔，文档时间见左栏）`,
+            amount: r.amount,
+          }
+          const evidences: Evidence[] = [{
+            id: evId,
+            actionId,
+            source: '资金往来系统',
+            sourceType: 'fund',
+            recordId: `FUND-TX-${i}-${j}`,
+            ruleHit: t ? '财付通逐笔' : '财付通逐笔（无时间列或解析失败）',
+            rawContent: `对手: ${line.counterparty}\n金额: ${r.amount}\n文档时间: ${t || '—'}`,
+            remark: '',
+            status: 'pending',
+            time: t,
+          }]
+          entries.push({
+            time: t,
+            action,
+            evidences,
+            relatedPersons: pushRelatedForEvidence('fund', evId),
+          })
+        }
+      } else {
+        i += 1
+        const evId = `ev-fund-cp-${i}-agg`
+        const actionId = `action-fund-cp-${i}-agg`
+        const time = line.earliest_time || line.latest_time || ''
+        const action: EvidenceAction = {
+          id: actionId,
+          type: 'fund',
+          label: `${personId.value} → ${line.counterparty}`,
+          time,
+          description: `共 ${line.tx_count} 笔，仅汇总行（无逐笔明细行）`,
+          amount: line.amount,
+        }
+        const evidences: Evidence[] = [{
+          id: evId,
+          actionId,
+          source: '资金往来系统',
+          sourceType: 'fund',
+          recordId: `FUND-CP-${i}`,
+          ruleHit: '对手侧账户汇总',
+          rawContent: `对手: ${line.counterparty}\n金额: ${line.amount}\n笔数: ${line.tx_count}\n逐笔: 无`,
+          remark: '',
+          status: 'pending',
+          time: action.time,
+        }]
+        entries.push({
+          time: action.time,
+          action,
+          evidences,
+          relatedPersons: pushRelatedForEvidence('fund', evId),
+        })
       }
-      const rowPreview = (line.rows?.length)
-        ? `\n逐笔明细(前若干笔): ${line.rows.slice(0, 8).map((r) => r.amount).join(', ')}${line.rows.length > 8 ? '…' : ''}`
-        : ''
-      const evidences: Evidence[] = [{
-        id: evId,
-        actionId,
-        source: '资金往来系统',
-        sourceType: 'fund',
-        recordId: `FUND-CP-${i}`,
-        ruleHit: '对手侧账户汇总',
-        rawContent: `对手: ${line.counterparty}\n金额: ${line.amount}\n笔数: ${line.tx_count}${rowPreview}`,
-        remark: '',
-        status: 'pending',
-        time: action.time,
-      }]
-      entries.push({
-        time: action.time,
-        action,
-        evidences,
-        relatedPersons: pushRelatedForEvidence('fund', evId),
-      })
     }
   } else {
     const clueList = fundOnly ? clues.filter((c) => c.category === 'fund') : clues
@@ -161,11 +287,13 @@ const evidenceChainEntries = computed<EvidenceChainEntry[]>(() => {
         : clue.category === 'trip' ? 'trip'
         : 'other'
 
+      const t = (clue.created_at && String(clue.created_at)) || ''
+
       const action: EvidenceAction = {
         id: `action-${clue.id}`,
         type: actionType,
         label: clue.title,
-        time: portrait.value.basic_info?.summary?.includes('2024') ? '2024-01-01' : new Date().toISOString().slice(0, 10),
+        time: t,
         description: clue.title,
         amount: actionType === 'fund' ? portrait.value.economic.total_amount / Math.max(1, fundClueCount) : undefined,
       }
@@ -178,14 +306,14 @@ const evidenceChainEntries = computed<EvidenceChainEntry[]>(() => {
         sourceType: actionType,
         recordId: `CLU-${clue.id}`,
         ruleHit: clue.risk_level === 'high' ? '高风险规则命中' : clue.risk_level === 'medium' ? '中风险规则命中' : '低风险规则命中',
-        rawContent: `线索标题: ${clue.title}\n风险等级: ${clue.risk_level}\n评分: ${clue.risk_score}`,
+        rawContent: `线索标题: ${clue.title}\n风险等级: ${clue.risk_level}\n评分: ${clue.risk_score}\n入库时间: ${t || '—'}`,
         remark: '',
         status: clue.risk_level === 'high' ? 'confirmed' : 'pending',
-        time: action.time,
+        time: t,
       }]
 
       entries.push({
-        time: action.time,
+        time: t,
         action,
         evidences,
         relatedPersons: pushRelatedForEvidence(actionType, evId),
@@ -193,6 +321,7 @@ const evidenceChainEntries = computed<EvidenceChainEntry[]>(() => {
     }
   }
 
+  let ecoEntry: EvidenceChainEntry | null = null
   if (portrait.value.economic && entries.every((e) => e.action.type !== 'fund')) {
     const eco = portrait.value.economic
     if (eco.total_amount > 0) {
@@ -200,12 +329,12 @@ const evidenceChainEntries = computed<EvidenceChainEntry[]>(() => {
         id: 'action-eco-summary',
         type: 'fund',
         label: `资金流转总额 ${eco.total_amount.toLocaleString()} 元`,
-        time: new Date().toISOString().slice(0, 10),
+        time: '',
         description: eco.explain || `转出 ${eco.transfer_out_count} 次，转入 ${eco.transfer_in_count} 次，异常比例 ${(eco.anomaly_ratio * 100).toFixed(1)}%`,
         amount: eco.total_amount,
       }
-      entries.unshift({
-        time: action.time,
+      ecoEntry = {
+        time: '',
         action,
         evidences: [{
           id: 'ev-eco-summary',
@@ -214,17 +343,21 @@ const evidenceChainEntries = computed<EvidenceChainEntry[]>(() => {
           sourceType: 'fund',
           recordId: 'ECO-SUM',
           ruleHit: eco.anomaly_ratio > 0.3 ? '异常比例超过30%' : '资金流转正常',
-          rawContent: `总金额: ${eco.total_amount}\n异常比例: ${(eco.anomaly_ratio * 100).toFixed(1)}%\n转出: ${eco.transfer_out_count}\n转入: ${eco.transfer_in_count}`,
+          rawContent: `总金额: ${eco.total_amount}\n异常比例: ${(eco.anomaly_ratio * 100).toFixed(1)}%\n转出: ${eco.transfer_out_count}\n转入: ${eco.transfer_in_count}\n注: 本条目无单一文档时间，列于时间轴底部。`,
           remark: '',
           status: eco.anomaly_ratio > 0.3 ? 'confirmed' : 'pending',
-          time: action.time,
+          time: '',
         }],
         relatedPersons: [],
-      })
+      }
     }
   }
 
-  return entries.sort((a, b) => b.time.localeCompare(a.time))
+  sortEvidenceEntries(entries, sortBy)
+  if (ecoEntry) {
+    entries.push(ecoEntry)
+  }
+  return entries
 })
 
 const totalEvidenceCount = computed(() =>
@@ -240,23 +373,100 @@ const confirmedCount = computed(() =>
 const highlightChainId = ref<string | null>(null)
 
 const portraitGraphData = computed<EvidenceGraphData | null>(() => {
-  if (evidenceChainEntries.value.length === 0) return null
+  if (evidenceChainEntries.value.length === 0 || !portrait.value) return null
+
+  const chain = evidenceChainEntries.value
+  const fundLines = portrait.value.economic.fund_counterparty_lines ?? []
+  const suspectId = `suspect-${personId.value}`
+  const pid = personId.value
+
+  if (fundLines.length > 0) {
+    const nodes: EvidenceGraphNode[] = []
+    const edges: EvidenceGraphEdge[] = []
+    nodes.push({ id: suspectId, kind: 'suspect', label: pid })
+    for (let idx = 0; idx < fundLines.length; idx += 1) {
+      const line = fundLines[idx]
+      const merge = mergeFundByCounterparty.value
+      const actionId = merge ? `action-fund-cp-${idx + 1}` : `graph-fund-line-${idx}`
+      const t =
+        (line.earliest_time && String(line.earliest_time))
+        || (line.latest_time && String(line.latest_time))
+        || ''
+      const label = `${pid} → ${line.counterparty}`.trim()
+      const scrollId = merge
+        ? actionId
+        : (firstTimelineActionIdForFundLine(chain, pid, line.counterparty) ?? actionId)
+      nodes.push({
+        id: actionId,
+        kind: 'action',
+        label,
+        data: {
+          actionType: 'fund' as ActionType,
+          time: t,
+          timelineScrollId: scrollId,
+        },
+      })
+      const parts: string[] = []
+      if (line.tx_count > 0) parts.push(`共${line.tx_count}笔`)
+      if (line.amount != null) parts.push(`${line.amount.toLocaleString('zh-CN', { maximumFractionDigits: 0 })}元`)
+      const edgeLabel = parts.join(' ')
+      edges.push({
+        id: `e-s-${actionId}`,
+        source: suspectId,
+        target: actionId,
+        label: edgeLabel,
+        actionType: 'fund',
+        weight: line.amount,
+      })
+      const evGraphId = `ev-fund-graph-${idx}`
+      const mergedEvId = `ev-fund-cp-${idx + 1}`
+      const firstActId = firstTimelineActionIdForFundLine(chain, pid, line.counterparty)
+      const firstEntry = firstActId
+        ? chain.find((e) => e.action.id === firstActId)
+        : undefined
+      const timelineEvId = merge
+        ? mergedEvId
+        : (firstEntry?.evidences[0]?.id ?? evGraphId)
+      nodes.push({
+        id: evGraphId,
+        kind: 'evidence',
+        label: '资金往来系统',
+        data: {
+          actionType: 'fund' as ActionType,
+          sourceType: 'fund',
+          timelineEvidenceId: timelineEvId,
+        },
+      })
+      edges.push({
+        id: `e-a-${evGraphId}`,
+        source: actionId,
+        target: evGraphId,
+        label: line.amount != null
+          ? `${line.amount.toLocaleString('zh-CN', { maximumFractionDigits: 0 })}元`
+          : '产生证据',
+        actionType: 'fund',
+        weight: line.amount,
+      })
+    }
+    return { nodes, edges }
+  }
+
   const nodes: EvidenceGraphNode[] = []
   const edges: EvidenceGraphEdge[] = []
-
-  const suspectId = `suspect-${personId.value}`
-  nodes.push({ id: suspectId, kind: 'suspect', label: personId.value })
-
-  for (const entry of evidenceChainEntries.value) {
+  nodes.push({ id: suspectId, kind: 'suspect', label: pid })
+  for (const entry of chain) {
     const aId = entry.action.id
     nodes.push({
       id: aId,
       kind: 'action',
       label: entry.action.label,
-      data: { actionType: entry.action.type, time: entry.time },
+      data: {
+        actionType: entry.action.type,
+        time: entry.time,
+        timelineScrollId: entry.action.id,
+      },
     })
     edges.push({ id: `e-s-${aId}`, source: suspectId, target: aId, label: '', actionType: entry.action.type })
-
     const amt = entry.action.amount
     for (const ev of entry.evidences) {
       nodes.push({
@@ -297,14 +507,18 @@ function handleSelectPerson(pid: string) {
 function handleGraphNodeClick(p: { id: string; kind: EvidenceNodeKind; data: Record<string, unknown> }) {
   highlightChainId.value = p.id
   if (p.kind === 'evidence') {
-    const ev = evidenceChainEntries.value.flatMap((e) => e.evidences).find((e) => e.id === p.id)
+    const tid = p.data?.timelineEvidenceId
+    const all = evidenceChainEntries.value.flatMap((e) => e.evidences)
+    const ev = all.find((e) => e.id === p.id)
+      ?? (typeof tid === 'string' ? all.find((e) => e.id === tid) : undefined)
     if (ev) {
       selectedEvidence.value = ev
       panelVisible.value = true
     }
   }
   if (p.kind === 'action') {
-    const el = document.getElementById(`timeline-entry-${p.id}`)
+    const scrollId = typeof p.data?.timelineScrollId === 'string' ? p.data.timelineScrollId : p.id
+    const el = document.getElementById(`timeline-entry-${scrollId}`)
     el?.scrollIntoView({ behavior: 'smooth', block: 'center' })
   }
 }
@@ -375,7 +589,22 @@ function handleClosePanel() {
             <el-radio-button value="fund">资金</el-radio-button>
             <el-radio-button value="call">通话</el-radio-button>
             <el-radio-button value="trip">出行</el-radio-button>
+            <el-radio-button value="other">其他</el-radio-button>
           </el-radio-group>
+          <template v-if="(portrait.economic.fund_counterparty_lines?.length ?? 0) > 0">
+            <span class="filter-label fund-controls-label">资金轴</span>
+            <el-switch
+              v-model="mergeFundByCounterparty"
+              size="small"
+              inline-prompt
+              active-text="合并"
+              inactive-text="逐笔"
+            />
+            <el-radio-group v-model="sortFundBy" size="small" class="fund-sort-rg">
+              <el-radio-button value="time">时间序</el-radio-button>
+              <el-radio-button value="amount">按金额</el-radio-button>
+            </el-radio-group>
+          </template>
           <el-input
             v-model="filterPerson"
             placeholder="按关联人筛选"
@@ -404,7 +633,7 @@ function handleClosePanel() {
                 :loading="false"
                 :highlight-chain-id="highlightChainId"
                 :playback-index="-1"
-                filter-type="all"
+                :filter-type="filterType"
                 @node-click="handleGraphNodeClick"
                 @chain-count="() => {}"
               />
@@ -512,6 +741,8 @@ function handleClosePanel() {
   font-weight: 600;
   color: var(--app-text-secondary);
 }
+.fund-controls-label { margin-left: 8px; }
+.fund-sort-rg { margin-left: 0; }
 .filter-person-input {
   width: 200px;
   margin-left: auto;
