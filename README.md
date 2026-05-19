@@ -62,11 +62,11 @@ git branch -M main
 git push -u origin main
 ```
 
-发布 Windows 便携 ZIP 任选其一：
+发布 Windows 便携 ZIP（会出现在仓库 **Releases** 页）任选其一：
 
-1. **打标签**：`git tag v1.0.0 && git push origin v1.0.0` → 触发 Actions **windows-release**
-2. **GitHub Release**：在仓库 Releases 页创建版本并发布 → 自动上传 ZIP 到该 Release
-3. **手动构建**：仓库 **Actions** → **windows-release** → **Run workflow**，在 Artifacts 中下载 ZIP
+1. **打标签（推荐）**：`git tag v1.0.0 && git push origin v1.0.0` → 自动创建 Release 并上传 ZIP
+2. **手动运行工作流**：**Actions** → **windows-release** → **Run workflow**（可填 `v1.0.0`，留空则生成 `windows-<编号>` 预发布）
+3. **仅下载构建物**：同上工作流完成后，在 Run 详情 **Artifacts** 中也可下载 ZIP
 
 > **说明**：单个 `.exe` 作为启动器，依赖本机 Docker 拉起的完整服务栈；无法把 PostgreSQL / Neo4j 等全部打进一个无需 Docker 的 exe（体积与许可也不现实）。若需完全离线单机包，需另行裁剪架构（如 SQLite + 内嵌 Redis），与当前生产栈不同。
 

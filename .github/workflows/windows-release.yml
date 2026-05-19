@@ -1,14 +1,22 @@
-# 构建 Windows 便携包：ChallengeDemo.exe + Docker 源码 ZIP
-# 触发：发布 Release、手动 workflow_dispatch、推送 v* 标签
+# 构建 Windows 便携包并发布到 GitHub Releases
+# 触发方式：
+#   1. 推送标签 v*（如 v1.0.0）→ 自动创建 Release 并上传 ZIP
+#   2. Actions → windows-release → Run workflow（可填版本号）
+#   3. 在 Releases 页手动创建版本并发布 → 补充上传 ZIP（需已存在 tag）
 name: windows-release
 
 on:
-  release:
-    types: [published]
   push:
     tags:
       - "v*"
   workflow_dispatch:
+    inputs:
+      version:
+        description: "Release 标签（如 v1.0.0）；留空则使用 windows-<运行编号>"
+        required: false
+        type: string
+  release:
+    types: [published]
 
 permissions:
   contents: write
@@ -27,6 +35,23 @@ jobs:
         with:
           python-version: "3.11"
 
+      - name: Resolve release tag
+        id: rel
+        shell: pwsh
+        run: |
+          $tag = ""
+          if ("${{ github.event_name }}" -eq "release") {
+            $tag = "${{ github.event.release.tag_name }}"
+          } elseif ("${{ github.ref_type }}" -eq "tag") {
+            $tag = "${{ github.ref_name }}"
+          } elseif ("${{ inputs.version }}" -ne "") {
+            $tag = "${{ inputs.version }}"
+          } else {
+            $tag = "windows-${{ github.run_number }}"
+          }
+          echo "tag=$tag" >> $env:GITHUB_OUTPUT
+          Write-Host "Release tag: $tag"
+
       - name: Build ChallengeDemo.exe
         shell: pwsh
         run: |
@@ -40,10 +65,7 @@ jobs:
       - name: Stage portable ZIP
         shell: pwsh
         run: |
-          $version = "${{ github.ref_name }}"
-          if ($version -eq "${{ github.ref }}" -or $version -eq "main" -or $version -eq "master") {
-            $version = "dev-${{ github.sha }}"
-          }
+          $version = "${{ steps.rel.outputs.tag }}"
           & packaging/windows/stage-release.ps1 -ExePath dist/ChallengeDemo.exe -Version $version
 
       - name: Collect artifact name
@@ -62,10 +84,13 @@ jobs:
           path: dist/challenge-demo-windows-*.zip
           if-no-files-found: error
 
-      - name: Upload to GitHub Release
-        if: github.event_name == 'release'
+      - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ steps.rel.outputs.tag }}
+          name: Challenge Demo ${{ steps.rel.outputs.tag }} (Windows)
           files: dist/challenge-demo-windows-*.zip
+          generate_release_notes: true
+          prerelease: ${{ !startsWith(steps.rel.outputs.tag, 'v') }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
