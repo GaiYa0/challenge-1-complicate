@@ -1,16 +1,11 @@
 # PyInstaller spec — 在 Windows 上构建 ChallengeDemo.exe
-# 用法: pyinstaller packaging/windows/challenge-demo.spec
-
-import sys
-from pathlib import Path
+# 用法: pyinstaller --noconfirm --clean packaging/windows/challenge-demo.spec
 
 block_cipher = None
-ROOT = Path(SPECPATH).resolve().parent
-LAUNCHER = ROOT / "launcher.py"
 
 a = Analysis(
-    [str(LAUNCHER)],
-    pathex=[str(ROOT)],
+    ["launcher.py"],
+    pathex=[SPECPATH],
     binaries=[],
     datas=[],
     hiddenimports=[],
@@ -37,7 +32,7 @@ exe = EXE(
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
-    upx=True,
+    upx=False,
     upx_exclude=[],
     runtime_tmpdir=None,
     console=True,
@@ -46,5 +41,4 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-    icon=None,
 )

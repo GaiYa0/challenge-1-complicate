@@ -42,7 +42,7 @@
 
 | 方式 | 说明 |
 |------|------|
-| **GitHub Releases** | 在 [Releases](https://github.com/GaiYa0/challenge-1-complicate/releases) 下载 `challenge-demo-windows-*.zip`，解压后双击 `ChallengeDemo.exe` |
+| **GitHub Releases** | 在 [Releases](https://github.com/GaiYa0/challenge-1-complicate/releases) 直接下载 **`ChallengeDemo.exe`**，或下载完整便携包 `challenge-demo-windows-*.zip` |
 | **自行构建 exe** | 在 Windows 上于仓库根执行：`.\packaging\windows\build.ps1`（需 Python 3.10+），产物在 `dist\` |
 | **仅脚本（无 exe）** | `.\run\windows-start.ps1` / `.\run\windows-stop.ps1` |
 | **从 GitHub 克隆** | `git clone` 后安装 Docker Desktop，在项目根执行 `docker compose --env-file .env.dev up -d --build`，浏览器打开 <http://127.0.0.1:8080> |

@@ -60,19 +60,32 @@ $RoboDirs = @(
     @{ Src = "frontend"; Dst = "frontend" }
 )
 
+$excludeDirNames = @(
+    "node_modules", "dist", ".git", "__pycache__", ".pytest_cache",
+    ".mypy_cache", ".venv", "venv", "build"
+)
+
+function Copy-ProjectTree {
+    param([string]$SrcRoot, [string]$DstRoot)
+    New-Item -ItemType Directory -Force -Path $DstRoot | Out-Null
+    Get-ChildItem -Path $SrcRoot -Force | ForEach-Object {
+        if ($excludeDirNames -contains $_.Name) { return }
+        $target = Join-Path $DstRoot $_.Name
+        if ($_.PSIsContainer) {
+            Copy-ProjectTree -SrcRoot $_.FullName -DstRoot $target
+        } else {
+            Copy-Item -LiteralPath $_.FullName -Destination $target -Force
+        }
+    }
+}
+
 foreach ($pair in $RoboDirs) {
     $srcPath = Join-Path $RepoRoot $pair.Src
     $dstPath = Join-Path $StageRoot $pair.Dst
     if (-not (Test-Path $srcPath)) { continue }
-    robocopy $srcPath $dstPath /E /NFL /NDL /NJH /NJS /nc /ns /np `
-        /XD node_modules dist .git __pycache__ .pytest_cache .mypy_cache .venv venv build `
-        | Out-Null
-    if ($LASTEXITCODE -ge 8) {
-        throw "robocopy 失败: $($pair.Src) (exit $LASTEXITCODE)"
-    }
+    Copy-ProjectTree -SrcRoot $srcPath -DstRoot $dstPath
 }
 
-# robocopy 成功码 0-7
 $ReadmeWin = Join-Path $PSScriptRoot "README-WINDOWS.txt"
 if (Test-Path $ReadmeWin) {
     Copy-Item $ReadmeWin (Join-Path $StageRoot "README-WINDOWS.txt")
