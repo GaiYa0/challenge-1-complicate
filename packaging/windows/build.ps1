@@ -23,11 +23,16 @@ python -m pip install -r (Join-Path $PSScriptRoot "requirements-build.txt")
 $DistExe = Join-Path $RepoRoot "dist\ChallengeDemo.exe"
 if (Test-Path $DistExe) { Remove-Item $DistExe -Force }
 
-pyinstaller --noconfirm --clean (Join-Path $PSScriptRoot "challenge-demo.spec")
+Push-Location $PSScriptRoot
+pyinstaller --noconfirm --clean challenge-demo.spec
+Pop-Location
 
-if (-not (Test-Path $DistExe)) {
-    throw "构建失败：未生成 $DistExe"
+$BuiltExe = Join-Path $PSScriptRoot "dist\ChallengeDemo.exe"
+if (-not (Test-Path $BuiltExe)) {
+    throw "构建失败：未生成 $BuiltExe"
 }
+New-Item -ItemType Directory -Force -Path (Join-Path $RepoRoot "dist") | Out-Null
+Copy-Item $BuiltExe $DistExe -Force
 
 Write-Host "==> 已生成: $DistExe"
 

@@ -50,18 +50,25 @@ jobs:
 
       - name: Build ChallengeDemo.exe
         shell: pwsh
-        working-directory: packaging/windows
         run: |
           python -m pip install --upgrade pip
-          python -m pip install -r requirements-build.txt
-          pyinstaller --noconfirm --clean challenge-demo.spec
-          $exe = Join-Path $PWD "dist\ChallengeDemo.exe"
+          python -m pip install -r packaging/windows/requirements-build.txt
+          New-Item -ItemType Directory -Force -Path dist, build/pyinstaller | Out-Null
+          python -m PyInstaller `
+            --noconfirm --clean --onefile --noupx `
+            --name ChallengeDemo `
+            --distpath dist `
+            --workpath build/pyinstaller `
+            --specpath build/pyinstaller `
+            packaging/windows/launcher.py
+          $exe = Join-Path dist "ChallengeDemo.exe"
           if (-not (Test-Path $exe)) {
-            Get-ChildItem -Recurse dist, build -ErrorAction SilentlyContinue
-            throw "ChallengeDemo.exe not found at $exe"
+            Write-Host "::group::dist tree"
+            Get-ChildItem -Recurse dist, build/pyinstaller -ErrorAction SilentlyContinue
+            Write-Host "::endgroup::"
+            throw "未生成 dist/ChallengeDemo.exe"
           }
-          Copy-Item $exe (Join-Path $env:GITHUB_WORKSPACE "dist\ChallengeDemo.exe") -Force
-          Get-Item (Join-Path $env:GITHUB_WORKSPACE "dist\ChallengeDemo.exe") | Format-List *
+          Write-Host "Built: $exe ($(Get-Item $exe).Length bytes)"
 
       - name: Stage portable ZIP
         shell: pwsh
@@ -75,13 +82,12 @@ jobs:
         id: assets
         shell: pwsh
         run: |
-          $exe = Join-Path $env:GITHUB_WORKSPACE "dist\ChallengeDemo.exe"
-          if (-not (Test-Path $exe)) { throw "Missing $exe" }
+          $exe = Join-Path dist "ChallengeDemo.exe"
           $zip = Get-ChildItem -Path dist -Filter "challenge-demo-windows-*.zip" | Select-Object -First 1
+          if (-not (Test-Path $exe)) { throw "Missing $exe" }
           if (-not $zip) { throw "ZIP not found under dist/" }
           echo "exe=$exe" >> $env:GITHUB_OUTPUT
           echo "zip=$($zip.FullName)" >> $env:GITHUB_OUTPUT
-          echo "zip_name=$($zip.Name)" >> $env:GITHUB_OUTPUT
 
       - name: Upload workflow artifacts
         uses: actions/upload-artifact@v4
