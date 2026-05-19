@@ -1,5 +1,5 @@
-# CI/CD：构建镜像 → 漏洞扫描 → 推送 GHCR → 滚动更新 K8s Deployment
-# 需在仓库 Secrets 配置：KUBE_CONFIG（base64 编码的 kubeconfig）
+# CI/CD：构建镜像 → 漏洞扫描 → 推送 GHCR →（可选）滚动更新 K8s Deployment
+# 可选 Secret：KUBE_CONFIG（base64 编码的 kubeconfig）；未配置时跳过 deploy 作业
 # GHCR 镜像路径必须全小写，故对 github.repository_owner 做 tr 转换
 name: k8s-ci-cd
 
@@ -59,7 +59,9 @@ jobs:
   deploy:
     needs: build-and-push
     runs-on: ubuntu-latest
-    if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
+    if: |
+      (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master') &&
+      secrets.KUBE_CONFIG != ''
     environment: production
     steps:
       - name: Setup kubectl
@@ -72,10 +74,6 @@ jobs:
           KUBE_CONFIG_B64: ${{ secrets.KUBE_CONFIG }}
           IMAGE_REF: ${{ needs.build-and-push.outputs.image_sha }}
         run: |
-          if [ -z "$KUBE_CONFIG_B64" ]; then
-            echo "::error::KUBE_CONFIG secret 未配置，无法部署"
-            exit 1
-          fi
           mkdir -p "$HOME/.kube"
           echo "$KUBE_CONFIG_B64" | base64 -d > "$HOME/.kube/config"
           chmod 600 "$HOME/.kube/config"
