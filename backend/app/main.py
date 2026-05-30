@@ -101,6 +101,40 @@ def _apply_additive_schema_patches(conn) -> None:
             )
         except Exception:
             logger.debug("additive_patch_failed table=%s column=%s", table, column, exc_info=True)
+    try:
+        conn.execute(
+            text(
+                """
+                CREATE TABLE IF NOT EXISTS field_mapping_memory (
+                    id SERIAL PRIMARY KEY,
+                    user_id INTEGER NOT NULL,
+                    header_signature VARCHAR(512) NOT NULL,
+                    source_field VARCHAR(256) NOT NULL,
+                    target_field VARCHAR(128) NOT NULL,
+                    confidence DOUBLE PRECISION NOT NULL DEFAULT 0,
+                    hit_count INTEGER NOT NULL DEFAULT 0,
+                    created_at TIMESTAMP NOT NULL DEFAULT now(),
+                    updated_at TIMESTAMP NOT NULL DEFAULT now(),
+                    last_used_at TIMESTAMP NOT NULL DEFAULT now()
+                )
+                """
+            )
+        )
+        conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_fmm_user_signature ON field_mapping_memory (user_id, header_signature)"
+            )
+        )
+        conn.execute(
+            text("CREATE INDEX IF NOT EXISTS ix_fmm_last_used ON field_mapping_memory (last_used_at)")
+        )
+        conn.execute(
+            text(
+                "CREATE UNIQUE INDEX IF NOT EXISTS uq_fmm_user_header_source ON field_mapping_memory (user_id, header_signature, source_field)"
+            )
+        )
+    except Exception:
+        logger.debug("additive_table_patch_failed table=field_mapping_memory", exc_info=True)
 
 
 def _resolve_request_id(request: Request) -> str:

@@ -167,6 +167,12 @@ class Settings(BaseSettings):
     )
     REQUEST_ID_MAX_LEN: int = Field(default=128, ge=16, le=256)
 
+    # 导入识别
+    IMPORT_MATCH_NAME_WEIGHT: float = Field(default=0.7, ge=0.0, le=1.0)
+    IMPORT_MATCH_CONTENT_WEIGHT: float = Field(default=0.3, ge=0.0, le=1.0)
+    IMPORT_MATCH_MIN_SCORE: float = Field(default=55.0, ge=0.0, le=100.0)
+    IMPORT_MAPPING_REUSE_MIN_SIMILARITY: float = Field(default=80.0, ge=0.0, le=100.0)
+
     # 报告保留
     REPORT_RETENTION_DAYS: int = Field(
         default=30,

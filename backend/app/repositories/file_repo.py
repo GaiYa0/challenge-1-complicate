@@ -66,7 +66,7 @@ def list_files_for_tenant(db: Session, *, tenant_user_id: int) -> list[File]:
 def list_tabular_files_for_case_dataset(
     db: Session, *, tenant_user_id: int, case_id: int
 ) -> list[File]:
-    """案件专属 dataset（如 case-8）下的表格文件 CSV/XLS/XLSX，排除特征衍生文件。"""
+    """案件专属 dataset（如 case-8）下的结构化文件，排除特征衍生文件。"""
     ds = f"case-{int(case_id)}"
     q = (
         select(File)
@@ -77,7 +77,13 @@ def list_tabular_files_for_case_dataset(
     out: list[File] = []
     for f in rows:
         fn = (f.filename or "").lower()
-        if not (fn.endswith(".csv") or fn.endswith(".xls") or fn.endswith(".xlsx")):
+        if not (
+            fn.endswith(".csv")
+            or fn.endswith(".xls")
+            or fn.endswith(".xlsx")
+            or fn.endswith(".txt")
+            or fn.endswith(".json")
+        ):
             continue
         base = f.filename or ""
         if base.startswith("feature_"):

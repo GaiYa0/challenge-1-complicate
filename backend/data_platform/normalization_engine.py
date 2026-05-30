@@ -459,3 +459,289 @@ if __name__ == "__main__":
     print(result["report"])
     print("\n=== clean_df ===")
     print(result["clean_df"].to_string())
+
+
+# ==================== Enhanced Recognition Overrides ====================
+
+from rapidfuzz import fuzz  # noqa: E402
+
+STANDARD_COLUMNS = ("from_user", "to_user", "amount", "timestamp", "location")
+FIELD_ALIAS_DICT: dict[str, list[str]] = {
+    "from_user": ["from_user", "from", "payer", "pay_user", "付款人", "汇款人", "转账人", "付款方"],
+    "to_user": ["to_user", "to", "receiver", "payee", "counterparty", "收款人", "对手方", "收款方"],
+    "amount": ["amount", "amt", "money", "value", "交易金额", "金额", "发生金额", "转账金额"],
+    "timestamp": ["timestamp", "time", "trade_time", "txn_time", "transaction_time", "时间", "交易时间", "转账时间"],
+    "location": ["location", "place", "addr", "地址", "地点", "交易地点"],
+    "phone": ["phone", "mobile", "手机号", "手机"],
+    "id_card": ["id_card", "身份证", "身份证号"],
+    "bank_card": ["bank_card", "card_no", "银行卡", "银行卡号", "卡号"],
+    "latitude": ["lat", "latitude", "纬度"],
+    "longitude": ["lng", "lon", "longitude", "经度"],
+    "address": ["address", "addr", "住址", "详细地址"],
+    "name": ["name", "fullname", "姓名", "户名", "用户名"],
+    "txn_type": ["txn_type", "type", "业务类型", "交易类型", "摘要", "备注"],
+}
+_MAPPING_CACHE: dict[str, dict[str, str]] = {}
+_PHONE_RE = re.compile(r"^1[3-9]\d{9}$")
+_ID_RE = re.compile(r"^\d{17}[\dXx]$")
+_BANK_RE = re.compile(r"^\d{12,19}$")
+_TIME_RE = re.compile(r"\d{4}[-/年]\d{1,2}[-/月]\d{1,2}")
+_LAT_RE = re.compile(r"^-?\d{1,2}\.\d+$")
+_LNG_RE = re.compile(r"^-?\d{1,3}\.\d+$")
+
+
+def invalidate_mapping_cache(*, key: str | None = None, prefix: str | None = None) -> int:
+    """
+    清理字段映射的进程内缓存：
+    - key: 清理单条
+    - prefix: 清理前缀匹配的多条
+    返回删除条数。
+    """
+    if key:
+        return 1 if _MAPPING_CACHE.pop(str(key), None) is not None else 0
+    if prefix is None:
+        n = len(_MAPPING_CACHE)
+        _MAPPING_CACHE.clear()
+        return n
+    pref = str(prefix)
+    keys = [k for k in list(_MAPPING_CACHE.keys()) if k.startswith(pref)]
+    for k in keys:
+        _MAPPING_CACHE.pop(k, None)
+    return len(keys)
+
+
+def _norm_key_v2(name: str) -> str:
+    s = str(name or "").strip().lower()
+    s = s.replace("（", "(").replace("）", ")")
+    return re.sub(r"[^0-9a-zA-Z\u4e00-\u9fff]+", "", s)
+
+
+def _preprocess_dataframe(df: pd.DataFrame) -> pd.DataFrame:
+    if df is None or df.empty:
+        return pd.DataFrame()
+    out = df.copy()
+    out = out.dropna(axis=0, how="all").dropna(axis=1, how="all")
+    cols: list[str] = []
+    seen: dict[str, int] = {}
+    for i, c in enumerate(out.columns):
+        base = str(c or "").strip()
+        if not base or base.lower() == "nan":
+            base = f"col_{i+1}"
+        base = re.sub(r"\s+", " ", base).strip()
+        idx = seen.get(base, 0) + 1
+        seen[base] = idx
+        cols.append(base if idx == 1 else f"{base}_{idx}")
+    out.columns = cols
+    for col in out.columns:
+        if out[col].dtype == object or str(out[col].dtype) == "string":
+            out[col] = out[col].astype(str).replace("nan", "").fillna("").str.strip()
+    return out.reset_index(drop=True)
+
+
+def _score_by_content(series: pd.Series, canonical: str) -> float:
+    vals = series.dropna().astype(str)
+    vals = vals[vals.str.strip() != ""].head(256)
+    if vals.empty:
+        return 0.0
+    total = len(vals)
+    if canonical == "amount":
+        parsed = (
+            vals.str.replace(r"[￥¥,\s，]|人民币", "", regex=True)
+            .pipe(pd.to_numeric, errors="coerce")
+            .notna()
+            .sum()
+        )
+        return float(parsed) / float(total) * 100.0
+    if canonical == "timestamp":
+        parsed = pd.to_datetime(vals, errors="coerce", format="mixed").notna().sum()
+        return float(parsed) / float(total) * 100.0
+    if canonical == "phone":
+        return float(vals.str.match(_PHONE_RE).sum()) / float(total) * 100.0
+    if canonical == "id_card":
+        return float(vals.str.match(_ID_RE).sum()) / float(total) * 100.0
+    if canonical == "bank_card":
+        return float(vals.str.match(_BANK_RE).sum()) / float(total) * 100.0
+    if canonical == "latitude":
+        return float(vals.str.match(_LAT_RE).sum()) / float(total) * 100.0
+    if canonical == "longitude":
+        return float(vals.str.match(_LNG_RE).sum()) / float(total) * 100.0
+    if canonical == "location":
+        h = vals.str.contains(r"路|街|区|镇|村|大道|号|省|市", regex=True).sum()
+        return float(h) / float(total) * 100.0
+    if canonical in {"from_user", "to_user", "name"}:
+        h = vals.str.match(r"^[\u4e00-\u9fffA-Za-z]{2,20}$").sum()
+        return float(h) / float(total) * 100.0
+    return 0.0
+
+
+def _resolve_mapping_v2(
+    df: pd.DataFrame,
+    *,
+    manual_mapping: dict[str, str] | None = None,
+    learned_mapping: dict[str, str] | None = None,
+    alias_dict: dict[str, list[str]] | None = None,
+    name_weight: float = 0.7,
+    content_weight: float = 0.3,
+    min_score: float = 55.0,
+) -> tuple[dict[str, str], dict[str, dict[str, float]]]:
+    active_alias_dict = alias_dict or FIELD_ALIAS_DICT
+    cols = [str(c) for c in df.columns]
+    mapping: dict[str, str] = {}
+    scores: dict[str, dict[str, float]] = {}
+
+    if manual_mapping:
+        for raw, can in manual_mapping.items():
+            if raw in df.columns and can in active_alias_dict:
+                mapping[str(raw)] = str(can)
+                scores[str(raw)] = {"name": 100.0, "content": 100.0, "final": 100.0}
+
+    if learned_mapping:
+        for raw, can in learned_mapping.items():
+            if raw in df.columns and raw not in mapping and can in active_alias_dict:
+                mapping[str(raw)] = str(can)
+                scores[str(raw)] = {"name": 95.0, "content": 80.0, "final": 90.5}
+
+    used_can = set(mapping.values())
+    for col in cols:
+        if col in mapping:
+            continue
+        norm_col = _norm_key_v2(col)
+        best_can = None
+        best_name = 0.0
+        best_content = 0.0
+        best_final = 0.0
+        for can, aliases in active_alias_dict.items():
+            if can in used_can and can in STANDARD_COLUMNS:
+                continue
+            alias_scores = [float(fuzz.WRatio(norm_col, _norm_key_v2(a))) for a in (aliases + [can])]
+            name_sc = max(alias_scores) if alias_scores else 0.0
+            content_sc = _score_by_content(df[col], can)
+            final_sc = name_weight * name_sc + content_weight * content_sc
+            if final_sc > best_final:
+                best_can, best_name, best_content, best_final = can, name_sc, content_sc, final_sc
+        if best_can and best_final >= min_score:
+            mapping[col] = best_can
+            used_can.add(best_can)
+            scores[col] = {"name": round(best_name, 2), "content": round(best_content, 2), "final": round(best_final, 2)}
+
+    return mapping, scores
+
+
+def _apply_mapping_v2(df: pd.DataFrame, mapping: dict[str, str]) -> pd.DataFrame:
+    picks: dict[str, str] = {}
+    for raw, can in mapping.items():
+        if raw in df.columns and can not in picks:
+            picks[can] = raw
+    out = pd.DataFrame()
+    for can in FIELD_ALIAS_DICT:
+        if can in picks:
+            out[can] = df[picks[can]]
+    for can in STANDARD_COLUMNS:
+        if can not in out.columns:
+            if can == "amount":
+                out[can] = 0.0
+            else:
+                out[can] = ""
+    if "timestamp" in out.columns:
+        ts = pd.to_datetime(out["timestamp"], errors="coerce", format="mixed")
+        out["timestamp"] = ts.dt.strftime("%Y-%m-%d %H:%M:%S").fillna("")
+    if "amount" in out.columns:
+        out["amount"] = (
+            out["amount"].astype(str).str.replace(r"[￥¥,\s，]|人民币", "", regex=True)
+        )
+        out["amount"] = pd.to_numeric(out["amount"], errors="coerce").fillna(0.0).round(2)
+    for c in ("from_user", "to_user", "location"):
+        out[c] = out[c].astype(str).replace("nan", "").fillna("").str.strip()
+    out["txn_time"] = out["timestamp"]
+    out["account"] = out["from_user"]
+    return out
+
+
+def clean_and_standardize(
+    df: pd.DataFrame,
+    *,
+    manual_mapping: dict[str, str] | None = None,
+    canonical_aliases: dict[str, list[str]] | None = None,
+    refund_type_column: str | None = None,
+    manual_refund_mapping: dict[str, str] | None = None,
+    extreme_iqr_factor: float = 5.0,
+    dedupe_subset: list[str] | None = None,
+    learned_mapping: dict[str, str] | None = None,
+    mapping_cache_key: str | None = None,
+    name_weight: float = 0.7,
+    content_weight: float = 0.3,
+    min_match_score: float = 55.0,
+) -> dict[str, Any]:
+    if df is None or df.empty:
+        return {
+            "clean_df": pd.DataFrame(columns=list(STANDARD_COLUMNS)),
+            "report": {
+                "total": 0,
+                "removed_duplicates": 0,
+                "anomaly_count": 0,
+                "rows_before_dedupe": 0,
+                "mapped_columns": {},
+                "mapping_scores": {},
+            },
+        }
+    src = _preprocess_dataframe(df)
+    merged_manual = dict(manual_mapping or {})
+    if manual_refund_mapping:
+        merged_manual.update(manual_refund_mapping)
+    if refund_type_column and refund_type_column in src.columns:
+        merged_manual[str(refund_type_column)] = "txn_type"
+    alias_dict = {k: list(v) for k, v in FIELD_ALIAS_DICT.items()}
+    if canonical_aliases:
+        for can, aliases in canonical_aliases.items():
+            alias_dict.setdefault(str(can), [])
+            alias_dict[str(can)].extend(str(a) for a in (aliases or []))
+    cache_hit = False
+    mapping: dict[str, str]
+    mapping_scores: dict[str, dict[str, float]]
+    if mapping_cache_key and mapping_cache_key in _MAPPING_CACHE:
+        mapping = dict(_MAPPING_CACHE[mapping_cache_key])
+        mapping_scores = {}
+        cache_hit = True
+    else:
+        mapping, mapping_scores = _resolve_mapping_v2(
+            src,
+            manual_mapping=merged_manual or None,
+            learned_mapping=learned_mapping,
+            alias_dict=alias_dict,
+            name_weight=name_weight,
+            content_weight=content_weight,
+            min_score=min_match_score,
+        )
+        if mapping_cache_key:
+            _MAPPING_CACHE[mapping_cache_key] = dict(mapping)
+
+    mapped = _apply_mapping_v2(src, mapping)
+    unresolved_required = [c for c in STANDARD_COLUMNS if c not in set(mapping.values())]
+    rows_before_dedupe = len(mapped)
+    dedupe_keys = dedupe_subset or ["timestamp", "from_user", "to_user", "amount"]
+    dedupe_keys = [k for k in dedupe_keys if k in mapped.columns]
+    if dedupe_keys:
+        deduped = mapped.drop_duplicates(subset=dedupe_keys, keep="first")
+        removed = int(len(mapped) - len(deduped))
+    else:
+        deduped, removed = mapped, 0
+    flagged = mark_anomalies(
+        deduped,
+        time_col="timestamp",
+        amount_col="amount",
+        txn_type_col="txn_type" if "txn_type" in deduped.columns else None,
+        extreme_iqr_factor=extreme_iqr_factor,
+    )
+    anomaly_count = int(flagged["is_anomaly"].sum()) if "is_anomaly" in flagged.columns else 0
+    report = {
+        "total": len(flagged),
+        "removed_duplicates": removed,
+        "anomaly_count": anomaly_count,
+        "rows_before_dedupe": rows_before_dedupe,
+        "mapped_columns": mapping,
+        "mapping_scores": mapping_scores,
+        "mapping_cache_hit": cache_hit,
+        "standard_columns": list(STANDARD_COLUMNS),
+        "failed_required_columns": unresolved_required,
+    }
+    return {"clean_df": flagged, "report": report}

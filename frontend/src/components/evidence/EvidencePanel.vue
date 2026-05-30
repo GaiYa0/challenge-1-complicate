@@ -7,6 +7,7 @@
 import { computed } from 'vue'
 import type { Evidence, ActionType } from '../../types/evidence'
 import { ACTION_TYPE_LABELS } from '../../types/evidence'
+import { getFieldLabel } from '../../utils/fieldLabels'
 
 const props = defineProps<{
   visible: boolean
@@ -22,6 +23,21 @@ const emit = defineEmits<{
 const localRemark = computed({
   get: () => props.evidence?.remark ?? '',
   set: (v) => emit('update:remark', v),
+})
+
+const formattedRawContent = computed(() => {
+  const raw = props.evidence?.rawContent ?? ''
+  if (!raw) return '无原始记录'
+  return raw
+    .split('\n')
+    .map((line) => {
+      const idx = line.indexOf(':')
+      if (idx <= 0) return line
+      const key = line.slice(0, idx).trim()
+      const value = line.slice(idx + 1)
+      return `${getFieldLabel(key)}:${value}`
+    })
+    .join('\n')
 })
 
 function statusLabel(s: string): string {
@@ -163,7 +179,7 @@ function sourceTypeLabel(s: string): string {
       <!-- 原始记录 -->
       <div class="panel-section">
         <h4 class="section-label">原始记录</h4>
-        <pre class="raw-content">{{ evidence.rawContent || '无原始记录' }}</pre>
+        <pre class="raw-content">{{ formattedRawContent }}</pre>
       </div>
 
       <!-- 备注 -->

@@ -28,17 +28,14 @@ def list_case_clues(
     case_id: int,
     current_user: Annotated[User, Depends(get_current_user)],
     db: Session = Depends(get_db),
+    minio: Minio = Depends(get_minio),
 ):
-    from backend.app.repositories import case_repo as _case_repo
-    from backend.core.tenant_access import is_admin as _is_admin
-
-    row = _case_repo.get_by_id(db, case_id)
-    if row is None:
-        raise clue_service.AppError("案件不存在", code=42001, status_code=404)
-    if not _is_admin(current_user) and row.user_id != current_user.id:
-        raise clue_service.ForbiddenError("无权访问该案件", code=42002)
-    from backend.app.repositories import clue_repo
-    rows = clue_repo.list_by_case(db, case_id=case_id)
+    rows = clue_service.ensure_case_clues(
+        db,
+        minio,
+        case_id=case_id,
+        user=current_user,
+    )
     data = [
         {
             "id": r.id,

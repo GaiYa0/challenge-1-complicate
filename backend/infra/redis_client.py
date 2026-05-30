@@ -151,7 +151,7 @@ def cache_delete(redis: Redis, *keys: str) -> int:
 
 def invalidate_analyze_for_file(redis: Redis, user_id: int, resource_id: str) -> None:
     """数据变更后删除该资源下所有 analyze 类型缓存（防脏读）。"""
-    types_ = ("stats", "preview", "anomaly", "clean", "basic", "iforest", "graph", "mock")
+    types_ = ("stats", "preview", "anomaly", "clean", "clean_rows", "basic", "iforest", "graph", "mock")
     ks = [analyze_cache_key(t, user_id, resource_id) for t in types_]
     cache_delete(redis, *ks)
     for k in ks:

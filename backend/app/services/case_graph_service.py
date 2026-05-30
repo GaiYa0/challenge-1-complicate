@@ -1,7 +1,7 @@
 """
-案件维度图谱：从「本案 dataset=case-{id}」下的表格文件（CSV / XLS / XLSX）构建边。
+案件维度图谱：从「本案 dataset=case-{id}」下的表格文件构建资金关系边。
 
-支持通用 name/counterparty 列、财付通 TenpayTrades 样本列；TenpayRegInfo 注册表不生成资金流边。
+支持通用列识别（含 Tenpay 别名兼容）；注册信息类表不生成资金流边。
 """
 
 from __future__ import annotations
@@ -24,89 +24,25 @@ from backend.app.schemas.graph import (
     GraphVisualizationEdge,
     GraphVisualizationNode,
 )
-from backend.app.services import graph_controlled_service, tenpay_graph
-from backend.app.services import tabular_fund_extract
+from backend.app.services import graph_controlled_service, tabular_graph_adapter
 from backend.app.services.file_service import read_tabular_bytes_to_dataframe
 
 logger = logging.getLogger(__name__)
 
-_NAME_KEYS = frozenset(
-    {
-        "name",
-        "姓名",
-        "客户名称",
-        "户名",
-        "交易户名",
-        "客户名",
-        "账户名称",
-        "用户侧账号名称",
-        "用户侧",
-    }
-)
-_CP_KEYS = frozenset(
-    {
-        "counterparty",
-        "counter_party",
-        "对手",
-        "交易对手",
-        "对方",
-        "对方户名",
-        "对手方",
-        "对方名称",
-        "对手侧账户名称",
-        "对手侧",
-    }
-)
-
-
-def _norm_key(c: object) -> str:
-    return str(c).strip().lower()
-
-
-def _pick_column(df: pd.DataFrame, candidates: frozenset[str]) -> str | None:
-    for col in df.columns:
-        k = _norm_key(col)
-        if k in candidates:
-            return str(col)
-    for col in df.columns:
-        k = _norm_key(col)
-        for cand in candidates:
-            if cand in k:
-                return str(col)
-    return None
-
-
-def _edges_from_dataframe(df: pd.DataFrame) -> list[tuple[str, str, float]]:
-    name_col = _pick_column(df, _NAME_KEYS)
-    cp_col = _pick_column(df, _CP_KEYS)
-    if not name_col or not cp_col:
-        return []
-    agg: dict[tuple[str, str], int] = defaultdict(int)
-    for _, row in df.iterrows():
-        s = str(row[name_col]).strip() if pd.notna(row[name_col]) else ""
-        t = str(row[cp_col]).strip() if pd.notna(row[cp_col]) else ""
-        if not s or not t or s == t:
-            continue
-        agg[(s, t)] += 1
-    return [(s, t, float(w)) for (s, t), w in agg.items()]
-
-
 def _edges_for_case_file(filename: str, df: pd.DataFrame) -> list[tuple[str, str, float]]:
-    if tenpay_graph.is_tenpay_reginfo_file(filename):
-        logger.info("case_graph_skip_reginfo filename=%s", filename)
+    if tabular_graph_adapter.is_registry_profile_file(filename):
+        logger.info("case_graph_skip_registry_profile filename=%s", filename)
         return []
-    if tenpay_graph.should_use_tenpay_trades_adapter(filename, df):
-        edges = tenpay_graph.edges_from_tenpay_trades(df)
-        if edges:
-            logger.info(
-                "case_graph_adapter kind=tenpay_trades filename=%s edge_count=%s",
-                filename,
-                len(edges),
-            )
-            return edges
-    edges = _edges_from_dataframe(df)
+    if not tabular_graph_adapter.can_extract_fund_edges(filename, df):
+        logger.info(
+            "case_graph_adapter kind=no_fund_columns filename=%s cols=%s",
+            filename,
+            list(df.columns)[:20],
+        )
+        return []
+    edges = tabular_graph_adapter.edges_from_tabular_fund(df)
     logger.info(
-        "case_graph_adapter kind=generic filename=%s edge_count=%s cols=%s",
+        "case_graph_adapter kind=tabular_fund filename=%s edge_count=%s cols=%s",
         filename,
         len(edges),
         list(df.columns)[:20],
@@ -242,7 +178,7 @@ def person_in_case_tabular_graph(
     return pid in node_set_from_edges(edges)
 
 
-def aggregate_tenpay_amount_and_rows_for_person(
+def aggregate_tabular_amount_and_rows_for_person(
     db: Session,
     minio: Minio,
     *,
@@ -251,7 +187,7 @@ def aggregate_tenpay_amount_and_rows_for_person(
     person_id: str,
 ) -> tuple[float | None, int]:
     """
-    遍历本案 TenpayTrades 表，汇总 person 作为用户侧的交易金额与行数。
+    遍历本案可识别资金表，汇总 person 作为用户侧的交易金额与行数。
     无匹配行返回 (None, 0)；有行但无金额列返回 (None, 行数)，由画像回退合成金额。
     """
     files = file_repo.list_tabular_files_for_case_dataset(
@@ -265,17 +201,17 @@ def aggregate_tenpay_amount_and_rows_for_person(
         try:
             raw = minio_ops.get_bytes(minio, f.bucket_name, f.object_name)
             df = read_tabular_bytes_to_dataframe(fn, raw)
-            if not tenpay_graph.should_use_tenpay_trades_adapter(fn, df):
+            if tabular_graph_adapter.is_registry_profile_file(fn):
                 continue
-            amt, rows, has_col = tenpay_graph.tenpay_amount_row_stats_for_person(
-                df, person_id
-            )
+            amt, rows, has_col, matched = tabular_graph_adapter.amount_row_stats_for_person(df, person_id)
+            if not matched:
+                continue
             total_rows += rows
             total_sum += amt
             if has_col:
                 saw_amount_col = True
         except Exception:
-            logger.exception("case_tenpay_amount_scan_failed filename=%s", fn)
+            logger.exception("case_tabular_amount_scan_failed filename=%s", fn)
     if total_rows == 0:
         return None, 0
     if not saw_amount_col:
@@ -328,7 +264,7 @@ def _cap_fund_tx_rows(
     return out
 
 
-def aggregate_tenpay_fund_lines_for_person(
+def aggregate_tabular_fund_lines_for_person(
     db: Session,
     minio: Minio,
     *,
@@ -342,8 +278,8 @@ def aggregate_tenpay_fund_lines_for_person(
 ]:
     """
     跨本案表格文件，按对手合并金额、笔数与逐笔 (金额, 文档时间)：
-    - 财付通 TenpayTrades 适配表走 tenpay 解析；
-    - 其他 CSV/XLSX 在能识别 用户/对手/金额/（时间） 列时走 tabular_fund_extract，与上结构一致。
+    - 通用字段识别（含 Tenpay 别名兼容）统一解析；
+    - 注册信息类表自动跳过。
     并做上限截断；返回每对手全量数据的最早/最晚时间。
     """
     merged: dict[str, list[float | int]] = defaultdict(lambda: [0.0, 0])
@@ -356,32 +292,23 @@ def aggregate_tenpay_fund_lines_for_person(
         try:
             raw = minio_ops.get_bytes(minio, f.bucket_name, f.object_name)
             df = read_tabular_bytes_to_dataframe(fn, raw)
-            if tenpay_graph.is_tenpay_reginfo_file(fn):
+            if tabular_graph_adapter.is_registry_profile_file(fn):
                 continue
-            if tenpay_graph.should_use_tenpay_trades_adapter(fn, df):
-                agg_rows, rows_dict = tenpay_graph.tenpay_counterparty_agg_and_row_amounts(
-                    df, person_id
-                )
-            else:
-                alt = tabular_fund_extract.try_generic_fund_aggregation(
-                    df, person_id, log_ctx=fn
-                )
-                if alt is None:
-                    continue
-                agg_rows, rows_dict = alt
-                if agg_rows:
-                    logger.info(
-                        "case_fund_lines_adapter kind=generic_tabular filename=%s lines=%s",
-                        fn,
-                        len(agg_rows),
-                    )
+            agg_rows, rows_dict = tabular_graph_adapter.counterparty_agg_and_row_amounts(df, person_id)
+            if not agg_rows:
+                continue
+            logger.info(
+                "case_fund_lines_adapter kind=tabular filename=%s lines=%s",
+                fn,
+                len(agg_rows),
+            )
             for cp, amt, cnt in agg_rows:
                 merged[cp][0] += amt
                 merged[cp][1] += cnt
             for cp, pairs in rows_dict.items():
                 merged_rows[cp].extend(pairs)
         except Exception:
-            logger.exception("case_tenpay_fund_lines_failed filename=%s", fn)
+            logger.exception("case_tabular_fund_lines_failed filename=%s", fn)
     out = [(k, float(v[0]), int(v[1])) for k, v in merged.items()]
     out.sort(key=lambda x: (-x[1], x[0]))
     time_bounds: dict[str, tuple[str | None, str | None]] = {
@@ -389,6 +316,46 @@ def aggregate_tenpay_fund_lines_for_person(
     }
     row_map = _cap_fund_tx_rows(dict(merged_rows))
     return out, row_map, time_bounds
+
+
+def aggregate_tenpay_amount_and_rows_for_person(
+    db: Session,
+    minio: Minio,
+    *,
+    tenant_user_id: int,
+    case_id: int,
+    person_id: str,
+) -> tuple[float | None, int]:
+    """兼容旧函数名，实际走通用表格实现。"""
+    return aggregate_tabular_amount_and_rows_for_person(
+        db,
+        minio,
+        tenant_user_id=tenant_user_id,
+        case_id=case_id,
+        person_id=person_id,
+    )
+
+
+def aggregate_tenpay_fund_lines_for_person(
+    db: Session,
+    minio: Minio,
+    *,
+    tenant_user_id: int,
+    case_id: int,
+    person_id: str,
+) -> tuple[
+    list[tuple[str, float, int]],
+    dict[str, list[tuple[float, str | None]]],
+    dict[str, tuple[str | None, str | None]],
+]:
+    """兼容旧函数名，实际走通用表格实现。"""
+    return aggregate_tabular_fund_lines_for_person(
+        db,
+        minio,
+        tenant_user_id=tenant_user_id,
+        case_id=case_id,
+        person_id=person_id,
+    )
 
 
 def _clip_viz(

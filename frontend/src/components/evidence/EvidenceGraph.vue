@@ -19,14 +19,24 @@ const props = withDefaults(
     data: EvidenceGraphData | null
     loading?: boolean
     highlightChainId?: string | null
+    focusNodeId?: string | null
+    hoverNodeId?: string | null
     playbackIndex?: number
     filterType?: ActionType | 'all'
   }>(),
-  { loading: false, highlightChainId: null, playbackIndex: -1, filterType: 'all' },
+  {
+    loading: false,
+    highlightChainId: null,
+    focusNodeId: null,
+    hoverNodeId: null,
+    playbackIndex: -1,
+    filterType: 'all',
+  },
 )
 
 const emit = defineEmits<{
   (e: 'node-click', payload: { id: string; kind: EvidenceNodeKind; data: Record<string, unknown> }): void
+  (e: 'node-hover', payload: { id: string | null; kind: EvidenceNodeKind | null; data: Record<string, unknown> | null }): void
   (e: 'chain-count', count: number): void
 }>()
 
@@ -59,7 +69,9 @@ function nodeIdFromEvt(evt: IEvent): string | null {
 
 function sig(d: EvidenceGraphData | null, ft: string, pi: number): string {
   if (!d) return ''
-  return `${d.nodes.length}:${d.edges.length}:${ft}:${pi}`
+  const nodeSig = d.nodes.map((n) => n.id).join('|')
+  const edgeSig = d.edges.map((e) => e.id).join('|')
+  return `${d.nodes.length}:${d.edges.length}:${ft}:${pi}:${nodeSig}:${edgeSig}`
 }
 
 /** 按边 actionType 选边，再沿图扩张闭包，保证 嫌疑人→行为→证据 整链保留 */
@@ -218,8 +230,7 @@ function isValidEdge(
   return false
 }
 
-let activeChainNodes = new Set<string>()
-let activeChainEdges = new Set<string>()
+let hoveredNodeId: string | null = null
 
 function highlightCluster(behaviorId: string) {
   if (!graph || graph.destroyed || !props.data) return
@@ -237,8 +248,6 @@ function highlightCluster(behaviorId: string) {
   for (const e of props.data.edges) {
     if (related.has(e.source) && related.has(e.target)) relEdges.add(e.id)
   }
-  activeChainNodes = related
-  activeChainEdges = relEdges
   try {
     for (const nId of related) { if (graph.hasNode(nId)) void graph.setElementState(nId, 'active') }
     for (const eId of relEdges) { if (graph.hasEdge(eId)) void graph.setElementState(eId, 'active') }
@@ -248,11 +257,89 @@ function highlightCluster(behaviorId: string) {
 function clearHighlight() {
   if (!graph || graph.destroyed) return
   try {
-    for (const nId of activeChainNodes) { if (graph.hasNode(nId)) void graph.setElementState(nId, []) }
-    for (const eId of activeChainEdges) { if (graph.hasEdge(eId)) void graph.setElementState(eId, []) }
+    for (const n of graph.getNodeData()) {
+      const nid = String(n.id)
+      if (graph.hasNode(nid)) void graph.setElementState(nid, [])
+    }
+    for (const e of graph.getEdgeData()) {
+      const eid = String(e.id)
+      if (graph.hasEdge(eid)) void graph.setElementState(eid, [])
+    }
   } catch { /* */ }
-  activeChainNodes = new Set()
-  activeChainEdges = new Set()
+}
+
+function clearHovered() {
+  if (!graph || graph.destroyed) return
+  if (!hoveredNodeId) return
+  try {
+    if (graph.hasNode(hoveredNodeId)) void graph.setElementState(hoveredNodeId, [])
+    const rel = graph.getRelatedEdgesData(hoveredNodeId)
+    for (const e of rel) {
+      if (e.id && graph.hasEdge(e.id)) void graph.setElementState(e.id, [])
+    }
+  } catch {
+    // noop
+  }
+  hoveredNodeId = null
+}
+
+function setHovered(nodeId: string) {
+  if (!graph || graph.destroyed || !graph.hasNode(nodeId)) return
+  clearHovered()
+  hoveredNodeId = nodeId
+  try {
+    void graph.setElementState(nodeId, 'active')
+    const rel = graph.getRelatedEdgesData(nodeId)
+    for (const e of rel) {
+      if (e.id && graph.hasEdge(e.id)) void graph.setElementState(e.id, 'active')
+    }
+  } catch {
+    // noop
+  }
+}
+
+function focusNode(nodeId: string | null | undefined) {
+  if (!nodeId || !graph || graph.destroyed || !graph.hasNode(nodeId)) return
+  try {
+    const n = graph.getNodeData(nodeId)
+    const x = Number((n.style as { x?: number } | undefined)?.x)
+    const y = Number((n.style as { y?: number } | undefined)?.y)
+    if (Number.isFinite(x) && Number.isFinite(y)) {
+      graph.focusElement(nodeId, true)
+    }
+  } catch {
+    // noop
+  }
+}
+
+function applyExternalHighlightAndFocus() {
+  if (!graph || graph.destroyed) return
+  const hid = props.highlightChainId
+  if (hid && graph.hasNode(hid)) {
+    const d = graph.getNodeData(hid).data as { kind?: EvidenceNodeKind } | undefined
+    const k = d?.kind ?? 'evidence'
+    if (k === 'action') highlightCluster(hid)
+    else {
+      clearHighlight()
+      try {
+        void graph.setElementState(hid, 'active')
+      } catch {
+        // noop
+      }
+    }
+  } else {
+    clearHighlight()
+  }
+  focusNode(props.focusNodeId ?? props.highlightChainId)
+}
+
+function applyExternalHover() {
+  if (!graph || graph.destroyed) return
+  if (props.hoverNodeId && graph.hasNode(props.hoverNodeId)) {
+    setHovered(props.hoverNodeId)
+  } else {
+    clearHovered()
+  }
 }
 
 async function mountGraph() {
@@ -468,11 +555,36 @@ async function mountGraph() {
     else clearHighlight()
     emit('node-click', { id, kind, data: (nd.data as Record<string, unknown>) ?? {} })
   }
+  const onEnter = (evt: IEvent) => {
+    const id = nodeIdFromEvt(evt)
+    if (!id || !graph || graph.destroyed || !graph.hasNode(id)) return
+    const nd = graph.getNodeData(id)
+    const d = nd.data as { kind?: EvidenceNodeKind; isCollapse?: boolean } | undefined
+    if (d?.isCollapse) return
+    setHovered(id)
+    emit('node-hover', {
+      id,
+      kind: d?.kind ?? 'evidence',
+      data: (nd.data as Record<string, unknown>) ?? {},
+    })
+  }
+  const onLeave = () => {
+    clearHovered()
+    emit('node-hover', { id: null, kind: null, data: null })
+  }
   graph.on(NodeEvent.CLICK, onClick)
-  unbind = () => { try { graph?.off(NodeEvent.CLICK, onClick) } catch { /* */ } }
+  graph.on(NodeEvent.POINTER_ENTER, onEnter)
+  graph.on(NodeEvent.POINTER_LEAVE, onLeave)
+  unbind = () => {
+    try { graph?.off(NodeEvent.CLICK, onClick) } catch { /* */ }
+    try { graph?.off(NodeEvent.POINTER_ENTER, onEnter) } catch { /* */ }
+    try { graph?.off(NodeEvent.POINTER_LEAVE, onLeave) } catch { /* */ }
+  }
 
   await graph.render()
   await graph.fitView(undefined, false)
+  applyExternalHighlightAndFocus()
+  applyExternalHover()
 
   resizeObs = new ResizeObserver(() => {
     if (resizeTimer) clearTimeout(resizeTimer)
@@ -495,7 +607,15 @@ function destroyGraph() {
 }
 
 onMounted(() => void mountGraph())
-watch(() => [props.data, props.loading, props.highlightChainId, props.playbackIndex, props.filterType], () => void mountGraph(), { deep: true })
+watch(() => [props.data, props.loading, props.playbackIndex, props.filterType], () => void mountGraph(), { deep: true })
+watch(
+  () => [props.highlightChainId, props.focusNodeId],
+  () => applyExternalHighlightAndFocus(),
+)
+watch(
+  () => props.hoverNodeId,
+  () => applyExternalHover(),
+)
 onBeforeUnmount(() => destroyGraph())
 
 defineExpose({ highlightCluster, clearHighlight })

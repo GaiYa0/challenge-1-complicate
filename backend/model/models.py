@@ -10,6 +10,7 @@ from backend.model.export_request import ExportRequest
 from backend.model.cost_metric import CostMetric
 from backend.model.feedback import Feedback
 from backend.model.feature import Feature
+from backend.model.field_mapping_memory import FieldMappingMemory
 from backend.model.file import File
 from backend.model.model_registry import ModelRegistry
 from backend.model.user import User
@@ -26,6 +27,7 @@ __all__ = [
     "File",
     "Feedback",
     "Feature",
+    "FieldMappingMemory",
     "ModelRegistry",
     "User",
 ]

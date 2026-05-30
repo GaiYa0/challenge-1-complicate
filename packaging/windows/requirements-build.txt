@@ -1,2 +1,2 @@
 # 仅用于在 Windows 上构建 ChallengeDemo.exe
-pyinstaller==6.11.1
+pyinstaller>=6.3.0

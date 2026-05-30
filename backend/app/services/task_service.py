@@ -10,6 +10,7 @@ from typing import Any
 from celery.result import AsyncResult
 from redis import Redis
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from backend.core.exceptions import ServiceError
@@ -29,6 +30,16 @@ from backend.tasks.clean_task import clean_data_task
 from backend.tasks.feature_task import feature_extract_task
 
 _log = logging.getLogger(__name__)
+
+
+def _is_duplicate_task_id_integrity_error(exc: IntegrityError) -> bool:
+    orig = getattr(exc, "orig", None)
+    pgcode = str(getattr(orig, "pgcode", "") or "")
+    constraint = str(getattr(getattr(orig, "diag", None), "constraint_name", "") or "")
+    if pgcode != "23505":
+        return False
+    # 仅放行 celery_task_id 唯一键冲突，其他完整性错误仍需 fail-closed。
+    return constraint in {"ix_celery_task_runs_celery_task_id", "celery_task_runs_celery_task_id_key"}
 
 
 def normalize_task_state(celery_state: str) -> str:
@@ -58,8 +69,45 @@ def _record_task(
                 state="PENDING",
             )
         )
-        db.commit()
+        # 统一由请求级事务边界提交，这里只 flush 以尽早暴露约束问题。
+        db.flush()
+    except IntegrityError as exc:
+        db.rollback()
+        if not _is_duplicate_task_id_integrity_error(exc):
+            _log.exception(
+                "record_task_integrity_failed_nonduplicate task_id=%s task_name=%s user_id=%s",
+                task_id,
+                task_name,
+                user_id,
+            )
+            raise ServiceError("failed to record task")
+        existed = db.execute(
+            select(CeleryTaskRun).where(CeleryTaskRun.celery_task_id == task_id).limit(1)
+        ).scalar_one_or_none()
+        if existed is not None:
+            existed_user = int(existed.user_id) if existed.user_id is not None else None
+            if existed_user == int(user_id):
+                _log.info(
+                    "record_task_duplicate_ignored task_id=%s task_name=%s user_id=%s",
+                    task_id,
+                    task_name,
+                    user_id,
+                )
+                return
+        _log.exception(
+            "record_task_integrity_failed task_id=%s task_name=%s user_id=%s",
+            task_id,
+            task_name,
+            user_id,
+        )
+        raise ServiceError("failed to record task")
     except Exception:
+        _log.exception(
+            "record_task_failed task_id=%s task_name=%s user_id=%s",
+            task_id,
+            task_name,
+            user_id,
+        )
         db.rollback()
         raise ServiceError("failed to record task")
 

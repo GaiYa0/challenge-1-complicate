@@ -17,12 +17,16 @@ from backend.app.schemas.common import ApiResponse, success_for_request
 from backend.app.schemas.file import (
     AnomalyData,
     CleanData,
+    CleanRowsData,
     ColumnStats,
     FileDetailItem,
+    FieldMappingConfirmIn,
+    FieldMappingConfirmOut,
     FileUploadData,
     PreviewData,
 )
-from backend.app.services import file_service
+from backend.app.services import data_pipeline_service, file_service
+from backend.infra.redis_client import invalidate_analyze_for_file
 
 router = APIRouter()
 
@@ -118,6 +122,23 @@ def clean_csv(
     return success_for_request(request, data)
 
 
+@router.get("/clean/rows/{filename}", response_model=ApiResponse[CleanRowsData])
+def clean_rows_csv(
+    request: Request,
+    filename: str,
+    current_user: Annotated[User, Depends(get_current_user)],
+    db: Session = Depends(get_db),
+    minio: Minio = Depends(get_minio),
+    redis: Redis = Depends(get_redis),
+    offset: int = Query(0, ge=0),
+    limit: int = Query(200, ge=1, le=500),
+):
+    data = file_service.clean_rows_csv(
+        db, minio, filename, current_user, offset=offset, limit=limit, redis=redis
+    )
+    return success_for_request(request, data)
+
+
 @router.get("/stats/{filename}", response_model=ApiResponse[dict[str, ColumnStats]])
 def stats_csv(
     request: Request,
@@ -141,4 +162,24 @@ def anomaly_csv(
     redis: Redis = Depends(get_redis),
 ):
     data = file_service.anomaly_csv(db, minio, redis, filename, current_user)
+    return success_for_request(request, data)
+
+
+@router.post("/mapping/confirm", response_model=ApiResponse[FieldMappingConfirmOut])
+def confirm_mapping(
+    body: FieldMappingConfirmIn,
+    request: Request,
+    current_user: Annotated[User, Depends(get_current_user)],
+    db: Session = Depends(get_db),
+    minio: Minio = Depends(get_minio),
+    redis: Redis = Depends(get_redis),
+):
+    data = data_pipeline_service.confirm_field_mapping(
+        db,
+        minio,
+        filename=body.filename,
+        user_id=int(current_user.id),
+        mapping=body.mapping,
+    )
+    invalidate_analyze_for_file(redis, int(current_user.id), body.filename)
     return success_for_request(request, data)

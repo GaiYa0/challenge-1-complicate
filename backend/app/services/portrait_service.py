@@ -4,16 +4,17 @@
 
 from __future__ import annotations
 
-import hashlib
 from datetime import datetime, timezone
 from typing import Any
 
+import pandas as pd
 from minio import Minio
 from neo4j import Driver
 from sqlalchemy.orm import Session
 
 from backend.core.exceptions import AppError, ForbiddenError
 from backend.core.tenant_access import is_admin
+from backend.data_platform.risk_scoring_system import classify_risk_level
 from backend.model.models import User
 from backend.app.repositories import case_repo
 from backend.app.schemas.graph import GraphVisualizationData, GraphVisualizationEdge, GraphVisualizationNode
@@ -29,7 +30,7 @@ from backend.app.schemas.portrait import (
     PortraitSocial,
     TimelineBin,
 )
-from backend.app.services import analysis_viz_service, case_graph_service, clue_service, graph_service
+from backend.app.services import case_graph_service, case_intel_service, clue_service, graph_service
 
 
 def _ensure_case(db: Session, user: User, case_id: int):
@@ -60,12 +61,6 @@ def _neo_transfer_counts(
     if not rec:
         return 0, 0
     return int(rec["c_out"] or 0), int(rec["c_in"] or 0)
-
-
-def _synthetic_amount(name: str, n_edges: int) -> float:
-    h = int(hashlib.md5(name.encode()).hexdigest()[:6], 16)
-    base = 30_000.0 + (h % 500) * 100.0
-    return float(max(0, n_edges) * base)
 
 
 def _build_social_subgraph(
@@ -118,29 +113,6 @@ def _hour_bins_from_points(points: list[MapPoint]) -> list[TimelineBin]:
     return [TimelineBin(hour=h, count=c) for h, c in enumerate(bins)]
 
 
-def _synthetic_behavior(person_id: str) -> tuple[list[MapPoint], dict[str, float]]:
-    h = int(hashlib.sha256(person_id.encode()).hexdigest()[:8], 16)
-    base_lat, base_lng = 39.9042 + (h % 7) * 0.002, 116.4074 + (h % 5) * 0.002
-    pts: list[MapPoint] = []
-    for i in range(10):
-        pts.append(
-            MapPoint(
-                lat=base_lat + (i % 4) * 0.004,
-                lng=base_lng + (i % 3) * 0.003,
-                ts=datetime.now(timezone.utc).isoformat(),
-                label=f"示例轨迹点{i+1}",
-            )
-        )
-    pad = 0.02
-    bounds = {
-        "min_lng": base_lng - pad,
-        "max_lng": base_lng + pad + 0.02,
-        "min_lat": base_lat - pad,
-        "max_lat": base_lat + pad + 0.02,
-    }
-    return pts, bounds
-
-
 def get_person_portrait(
     db: Session,
     neo4j: Driver,
@@ -165,29 +137,37 @@ def get_person_portrait(
             status_code=404,
         )
 
-    fund_only_flag = clue_service.case_tabular_is_tenpay_only(
-        db, case_id=case_id, tenant_user_id=tid
+    fund_only_flag = clue_service.case_tabular_is_fund_table_only(
+        db,
+        case_id=case_id,
+        tenant_user_id=tid,
     )
+    analytics = case_intel_service.run_case_analytics(
+        db,
+        minio,
+        tenant_user_id=tid,
+        case_id=case_id,
+    )
+    profile = case_intel_service.build_person_profile_from_case_analytics(pid, analytics)
 
     out_c, in_c = 0, 0
-    tenpay_amount: float | None = None
-    tenpay_rows = 0
+    tabular_amount: float | None = None
     if in_case:
         out_c, in_c = case_graph_service.transfer_counts_for_person(pid, case_edges)
-        tenpay_amount, tenpay_rows = (
-            case_graph_service.aggregate_tenpay_amount_and_rows_for_person(
+        tabular_amount, _ = (
+            case_graph_service.aggregate_tabular_amount_and_rows_for_person(
                 db, minio, tenant_user_id=tid, case_id=case_id, person_id=person_id
             )
         )
         fund_lines_raw, fund_tx_rows_map, fund_time_bounds = (
-            case_graph_service.aggregate_tenpay_fund_lines_for_person(
+            case_graph_service.aggregate_tabular_fund_lines_for_person(
                 db, minio, tenant_user_id=tid, case_id=case_id, person_id=person_id
             )
         )
         soc = case_graph_service.ego_graph_visualization_from_edges(case_edges, pid)
-        if tenpay_amount is not None:
+        if tabular_amount is not None:
             econ_explain = (
-                "资金总额来自本案财付通交易明细中金额列（按用户侧账号名称汇总）；"
+                "资金总额来自本案可识别资金交易表的金额列（按用户侧字段汇总）；"
                 "转出/转入条数来自表格构图；异常比例为高风险线索数占比。"
             )
         else:
@@ -205,22 +185,25 @@ def get_person_portrait(
         fund_tx_rows_map: dict[str, list[tuple[float, str | None]]] = {}
         fund_time_bounds: dict[str, tuple[str | None, str | None]] = {}
 
-    edge_hint = out_c + in_c
-    mock_hint: int | None = None
-    if tenpay_rows > 0:
-        mock_hint = min(15, max(5, tenpay_rows))
-    elif in_case and edge_hint > 0:
-        mock_hint = min(15, max(5, edge_hint))
-
-    rows = clue_service._seed_mock_if_empty(
-        db, case_id=case_id, person_id=person_id, mock_count_hint=mock_hint
+    rows = clue_service._ensure_real_clues_if_empty(
+        db,
+        minio,
+        case_id=case_id,
+        person_id=person_id,
     )
 
-    total_edges = out_c + in_c
-    if in_case and tenpay_amount is not None:
-        total_amount = float(tenpay_amount)
+    fund_df = analytics.get("fund_df")
+    if in_case and tabular_amount is not None:
+        total_amount = float(tabular_amount)
     else:
-        total_amount = _synthetic_amount(person_id, max(1, total_edges))
+        if isinstance(fund_df, pd.DataFrame) and not fund_df.empty:
+            person_rows = fund_df[
+                (fund_df["from_account"].astype(str) == pid)
+                | (fund_df["to_account"].astype(str) == pid)
+            ]
+            total_amount = float(person_rows["amount"].sum()) if not person_rows.empty else 0.0
+        else:
+            total_amount = 0.0
     if rows:
         high = sum(1 for r in rows if _cat(r.risk_level) == "high")
         anomaly_ratio = min(1.0, high / max(1, len(rows)))
@@ -229,21 +212,27 @@ def get_person_portrait(
         anomaly_ratio = 0.0
         avg_risk = 0.0
 
-    risk_score = min(100.0, max(0.0, avg_risk))
-    risk_level = "low" if risk_score < 40 else "medium" if risk_score < 70 else "high"
+    risk_score = min(100.0, max(0.0, float(profile.get("risk_score") or avg_risk)))
+    risk_level = str(profile.get("basic_info", {}).get("risk_level") or classify_risk_level(risk_score))
 
-    trip = analysis_viz_service.get_trip_viz_data()
+    trip = analytics.get("trip_df")
     map_points: list[MapPoint] = []
-    for p in trip.points:
-        if p.person_id == person_id:
-            map_points.append(
-                MapPoint(
-                    lat=p.lat,
-                    lng=p.lng,
-                    ts=p.ts,
-                    label=f"轨迹 {p.person_id}",
+    if trip is not None and not trip.empty:
+        for _, p in trip.iterrows():
+            if str(p.get("person_id", "")).strip() == person_id:
+                ts_raw = p.get("timestamp")
+                try:
+                    ts = pd.Timestamp(ts_raw).isoformat()
+                except Exception:
+                    ts = datetime.now(timezone.utc).isoformat()
+                map_points.append(
+                    MapPoint(
+                        lat=float(p.get("lat")),
+                        lng=float(p.get("lng")),
+                        ts=ts,
+                        label=f"轨迹 {p.get('person_id')}",
+                    )
                 )
-            )
     bounds_dict: dict[str, float] = {}
     if map_points:
         lats = [m.lat for m in map_points]
@@ -256,11 +245,10 @@ def get_person_portrait(
             "max_lat": max(lats) + pad,
         }
         timeline_bins = _hour_bins_from_points(map_points)
-        beh_explain = "轨迹数据来自分析任务示例；时间分布按定位点小时聚合。"
+        beh_explain = "轨迹数据来自案件导入数据，时间分布按小时聚合。"
     else:
-        map_points, bounds_dict = _synthetic_behavior(person_id)
-        timeline_bins = _hour_bins_from_points(map_points)
-        beh_explain = "当前无与本人物 ID 完全匹配的定位点，以下为基于人物标识生成的可解释占位轨迹，接入真实数据后将自动替换。"
+        timeline_bins = []
+        beh_explain = "当前未检索到该对象的轨迹记录。"
 
     soc_explain = (
         f"以「{person_id}」为中心的一跳邻域子图（资金有向边）；"
@@ -280,15 +268,15 @@ def get_person_portrait(
     ]
 
     amt_src = (
-        "财付通交易明细金额列汇总"
-        if in_case and tenpay_amount is not None
+        "可识别资金交易表金额列汇总"
+        if in_case and tabular_amount is not None
         else "基于图谱边数估算"
     )
-    summary = (
+    summary = str(profile.get("summary") or (
         f"{person_id} 在本案中共 {len(rows)} 条线索；"
         f"资金往来相关规模约 {total_amount:,.0f} 元（{amt_src}）；"
         f"综合风险分约 {risk_score:.0f}（{risk_level}）。"
-    )
+    ))
 
     return PersonPortraitOut(
         basic_info=PortraitBasicInfo(

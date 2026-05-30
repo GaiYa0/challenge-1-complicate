@@ -31,16 +31,16 @@ export interface ReportTaskResult {
 }
 
 export function generateReport(body: ReportGenerateBody) {
-  return http.post<ReportTaskQueued>('/reports/generate', {
+  return http.post('/reports/generate', {
     case_id: body.case_id,
     person_id: body.person_id,
     format: body.format ?? 'pdf',
     export_request_id: body.export_request_id,
-  })
+  }) as Promise<ReportTaskQueued>
 }
 
 export function getReportTask(taskId: string) {
-  return http.get<ReportTaskResult>(`/reports/tasks/${encodeURIComponent(taskId)}`, {
+  return http.get(`/reports/tasks/${encodeURIComponent(taskId)}`, {
     skipGlobalLoading: true,
-  } as Parameters<typeof http.get>[1])
+  } as Parameters<typeof http.get>[1]) as Promise<ReportTaskResult>
 }

@@ -1,30 +1,20 @@
 # 启动脚本（run）
 
-Docker Compose 与前端本地/生产构建的快捷入口，详细说明见仓库根目录 [README.md](../README.md)。
+仅保留**前后端一体上线**脚本，统一走 Docker Compose。
 
 ```bash
 chmod +x run/*.sh   # 首次可选
 ./run/run.sh help
 ```
 
-一键前后端（Docker）：`./run/docker-up.sh` 完成后打开 **<http://127.0.0.1:8080>**（API 文档仍在 **:8000/docs**）。
+## 可用脚本
 
-## 前后端分开 Compose
+- `./run/docker-up.sh`：构建并启动全栈（前端 Nginx + 后端 + 依赖）
+- `./run/docker-down.sh`：停止全栈
+- `./run/docker-logs.sh [service]`：查看日志（默认 `backend`）
+- `./run/run.sh <subcommand>`：统一入口（`docker-up` / `docker-down` / `docker-logs`）
 
-| 步骤 | 命令（均在仓库根目录） |
-|------|------------------------|
-| 只起后端栈（依赖 + API + Worker + Consumer） | `docker compose -f docker-compose.backend.yml --env-file .env.dev up -d --build` |
-| 再起前端（Nginx 8080） | `docker compose -f docker-compose.backend.yml -f docker-compose.frontend.yml --env-file .env.dev up -d --build web` |
-| 仍一键全栈 | `docker compose --env-file .env.dev up -d --build`（根目录 `docker-compose.yml` 已 `include` 两个文件） |
+## 启动后访问地址
 
-说明：`docker-compose.frontend.yml` 不含独立网络定义，**不要**单独 `-f docker-compose.frontend.yml up`；须带上 `docker-compose.backend.yml`，以便与已有 `challenge-backend` 共用 `app-net`。
-
-## Windows
-
-| 步骤 | 命令（PowerShell，仓库根目录） |
-|------|--------------------------------|
-| 一键启动（Docker + 打开浏览器） | `.\run\windows-start.ps1` |
-| 停止 | `.\run\windows-stop.ps1` |
-| 构建 `ChallengeDemo.exe` 与便携 ZIP | `.\packaging\windows\build.ps1` |
-
-便携版说明见 [`packaging/windows/README-WINDOWS.txt`](../packaging/windows/README-WINDOWS.txt)。
+- 业务入口：<http://127.0.0.1:8080>
+- API 文档：<http://127.0.0.1:8000/docs>

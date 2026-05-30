@@ -53,27 +53,6 @@ function sortEvidenceEntries(list: EvidenceChainEntry[], by: SortFundBy): void {
   }
 }
 
-/** 与 fund_counterparty 某行对应的、时间轴上按时间升序首条（用于汇总图谱节点点击） */
-function firstTimelineActionIdForFundLine(
-  chain: EvidenceChainEntry[],
-  person: string,
-  counterparty: string,
-): string | null {
-  const label = `${person} → ${counterparty}`.trim()
-  const candidates = chain.filter(
-    (e) => e.action.type === 'fund' && e.action.label.trim() === label,
-  )
-  if (candidates.length === 0) return null
-  const scored = candidates.map((e) => ({ e, t: timeSortValue(e.time) }))
-  scored.sort((a, b) => {
-    if (a.t === null && b.t === null) return 0
-    if (a.t === null) return 1
-    if (b.t === null) return -1
-    return a.t - b.t
-  })
-  return scored[0].e.action.id
-}
-
 const route = useRoute()
 const router = useRouter()
 const caseStore = useCaseStore()
@@ -90,8 +69,14 @@ const filterType = ref<ActionType | 'all'>('all')
 const filterPerson = ref('')
 const mergeFundByCounterparty = ref(false)
 const sortFundBy = ref<SortFundBy>('time')
+const timelineDisplayCount = ref(5)
+const showAllTimeline = ref(false)
 const panelVisible = ref(false)
 const selectedEvidence = ref<Evidence | null>(null)
+const activeActionId = ref<string | null>(null)
+const hoveredActionId = ref<string | null>(null)
+const graphFocusNodeId = ref<string | null>(null)
+const hoveredGraphNodeId = ref<string | null>(null)
 
 async function load(opts?: { force?: boolean }) {
   if (!personId.value || !Number.isFinite(caseId.value)) return
@@ -372,84 +357,32 @@ const confirmedCount = computed(() =>
 
 const highlightChainId = ref<string | null>(null)
 
-const portraitGraphData = computed<EvidenceGraphData | null>(() => {
-  if (evidenceChainEntries.value.length === 0 || !portrait.value) return null
+const filteredEvidenceChainEntries = computed(() => {
+  let list = evidenceChainEntries.value
+  if (filterType.value !== 'all') {
+    list = list.filter((e) => e.action.type === filterType.value)
+  }
+  const fp = filterPerson.value.trim().toLowerCase()
+  if (fp) {
+    list = list.filter((e) => e.relatedPersons.some((rp) => rp.name.toLowerCase().includes(fp)))
+  }
+  return list
+})
 
-  const chain = evidenceChainEntries.value
-  const fundLines = portrait.value.economic.fund_counterparty_lines ?? []
+const effectiveTimelineCount = computed(() => Math.max(5, Number(timelineDisplayCount.value || 5)))
+const shouldShowAllToggle = computed(() => filteredEvidenceChainEntries.value.length > effectiveTimelineCount.value)
+const visibleEvidenceChainEntries = computed(() => {
+  const all = filteredEvidenceChainEntries.value
+  if (showAllTimeline.value) return all
+  return all.slice(0, effectiveTimelineCount.value)
+})
+const visibleNodeCountHint = computed(() => visibleEvidenceChainEntries.value.length)
+
+const portraitGraphData = computed<EvidenceGraphData | null>(() => {
+  if (visibleEvidenceChainEntries.value.length === 0) return null
+  const chain = visibleEvidenceChainEntries.value
   const suspectId = `suspect-${personId.value}`
   const pid = personId.value
-
-  if (fundLines.length > 0) {
-    const nodes: EvidenceGraphNode[] = []
-    const edges: EvidenceGraphEdge[] = []
-    nodes.push({ id: suspectId, kind: 'suspect', label: pid })
-    for (let idx = 0; idx < fundLines.length; idx += 1) {
-      const line = fundLines[idx]
-      const merge = mergeFundByCounterparty.value
-      const actionId = merge ? `action-fund-cp-${idx + 1}` : `graph-fund-line-${idx}`
-      const t =
-        (line.earliest_time && String(line.earliest_time))
-        || (line.latest_time && String(line.latest_time))
-        || ''
-      const label = `${pid} → ${line.counterparty}`.trim()
-      const scrollId = merge
-        ? actionId
-        : (firstTimelineActionIdForFundLine(chain, pid, line.counterparty) ?? actionId)
-      nodes.push({
-        id: actionId,
-        kind: 'action',
-        label,
-        data: {
-          actionType: 'fund' as ActionType,
-          time: t,
-          timelineScrollId: scrollId,
-        },
-      })
-      const parts: string[] = []
-      if (line.tx_count > 0) parts.push(`共${line.tx_count}笔`)
-      if (line.amount != null) parts.push(`${line.amount.toLocaleString('zh-CN', { maximumFractionDigits: 0 })}元`)
-      const edgeLabel = parts.join(' ')
-      edges.push({
-        id: `e-s-${actionId}`,
-        source: suspectId,
-        target: actionId,
-        label: edgeLabel,
-        actionType: 'fund',
-        weight: line.amount,
-      })
-      const evGraphId = `ev-fund-graph-${idx}`
-      const mergedEvId = `ev-fund-cp-${idx + 1}`
-      const firstActId = firstTimelineActionIdForFundLine(chain, pid, line.counterparty)
-      const firstEntry = firstActId
-        ? chain.find((e) => e.action.id === firstActId)
-        : undefined
-      const timelineEvId = merge
-        ? mergedEvId
-        : (firstEntry?.evidences[0]?.id ?? evGraphId)
-      nodes.push({
-        id: evGraphId,
-        kind: 'evidence',
-        label: '资金往来系统',
-        data: {
-          actionType: 'fund' as ActionType,
-          sourceType: 'fund',
-          timelineEvidenceId: timelineEvId,
-        },
-      })
-      edges.push({
-        id: `e-a-${evGraphId}`,
-        source: actionId,
-        target: evGraphId,
-        label: line.amount != null
-          ? `${line.amount.toLocaleString('zh-CN', { maximumFractionDigits: 0 })}元`
-          : '产生证据',
-        actionType: 'fund',
-        weight: line.amount,
-      })
-    }
-    return { nodes, edges }
-  }
 
   const nodes: EvidenceGraphNode[] = []
   const edges: EvidenceGraphEdge[] = []
@@ -464,6 +397,7 @@ const portraitGraphData = computed<EvidenceGraphData | null>(() => {
         actionType: entry.action.type,
         time: entry.time,
         timelineScrollId: entry.action.id,
+        timelineActionId: entry.action.id,
       },
     })
     edges.push({ id: `e-s-${aId}`, source: suspectId, target: aId, label: '', actionType: entry.action.type })
@@ -473,7 +407,13 @@ const portraitGraphData = computed<EvidenceGraphData | null>(() => {
         id: ev.id,
         kind: 'evidence',
         label: ev.source,
-        data: { sourceLabel: ev.source, targetLabel: '', actionType: ev.sourceType },
+        data: {
+          sourceLabel: ev.source,
+          targetLabel: '',
+          actionType: ev.sourceType,
+          timelineEvidenceId: ev.id,
+          timelineActionId: entry.action.id,
+        },
       })
       edges.push({
         id: `e-a-${ev.id}`,
@@ -492,6 +432,8 @@ function handleSelectEvidence(ev: Evidence) {
   selectedEvidence.value = ev
   panelVisible.value = true
   highlightChainId.value = ev.id
+  activeActionId.value = ev.actionId
+  graphFocusNodeId.value = ev.actionId
 }
 
 function handleSelectPerson(pid: string) {
@@ -514,12 +456,48 @@ function handleGraphNodeClick(p: { id: string; kind: EvidenceNodeKind; data: Rec
     if (ev) {
       selectedEvidence.value = ev
       panelVisible.value = true
+      activeActionId.value = ev.actionId
+      graphFocusNodeId.value = ev.actionId
+      const el = document.getElementById(`timeline-entry-${ev.actionId}`)
+      el?.scrollIntoView({ behavior: 'smooth', block: 'center' })
     }
   }
   if (p.kind === 'action') {
     const scrollId = typeof p.data?.timelineScrollId === 'string' ? p.data.timelineScrollId : p.id
+    activeActionId.value = scrollId
+    graphFocusNodeId.value = p.id
     const el = document.getElementById(`timeline-entry-${scrollId}`)
     el?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+  }
+}
+
+function handleTimelineEntryClick(payload: { actionId: string }) {
+  activeActionId.value = payload.actionId
+  highlightChainId.value = payload.actionId
+  graphFocusNodeId.value = payload.actionId
+}
+
+function handleTimelineEntryHover(payload: { actionId: string | null }) {
+  hoveredActionId.value = payload.actionId
+  hoveredGraphNodeId.value = payload.actionId
+}
+
+function handleGraphNodeHover(p: { id: string | null; kind: EvidenceNodeKind | null; data: Record<string, unknown> | null }) {
+  if (!p.id || !p.kind) {
+    hoveredActionId.value = null
+    hoveredGraphNodeId.value = null
+    return
+  }
+  hoveredGraphNodeId.value = p.id
+  if (p.kind === 'action') {
+    hoveredActionId.value = p.id
+    return
+  }
+  if (p.kind === 'evidence' && p.data) {
+    const tid = p.data.timelineActionId
+    if (typeof tid === 'string') {
+      hoveredActionId.value = tid
+    }
   }
 }
 
@@ -565,7 +543,7 @@ function handleClosePanel() {
       <template v-else-if="portrait">
         <div class="evidence-summary-bar">
           <div class="summary-stat">
-            <span class="stat-num">{{ evidenceChainEntries.length }}</span>
+            <span class="stat-num">{{ filteredEvidenceChainEntries.length }}</span>
             <span class="stat-label">行为记录</span>
           </div>
           <div class="summary-stat">
@@ -605,6 +583,21 @@ function handleClosePanel() {
               <el-radio-button value="amount">按金额</el-radio-button>
             </el-radio-group>
           </template>
+          <span class="filter-label">显示条数</span>
+          <el-select v-model="timelineDisplayCount" size="small" style="width: 96px">
+            <el-option :value="5" label="5" />
+            <el-option :value="10" label="10" />
+            <el-option :value="20" label="20" />
+            <el-option :value="50" label="50" />
+          </el-select>
+          <el-switch
+            v-if="shouldShowAllToggle"
+            v-model="showAllTimeline"
+            size="small"
+            inline-prompt
+            active-text="全显"
+            inactive-text="前N"
+          />
           <el-input
             v-model="filterPerson"
             placeholder="按关联人筛选"
@@ -618,23 +611,29 @@ function handleClosePanel() {
           <div class="panel-left">
             <h2 class="section-title">证据链时间轴</h2>
             <EvidenceTimeline
-              :entries="evidenceChainEntries"
-              :filter-type="filterType"
-              :filter-person="filterPerson"
+              :entries="visibleEvidenceChainEntries"
+              :active-action-id="activeActionId"
+              :hovered-action-id="hoveredActionId"
               @select-evidence="handleSelectEvidence"
               @select-person="handleSelectPerson"
+              @entry-click="handleTimelineEntryClick"
+              @entry-hover="handleTimelineEntryHover"
             />
           </div>
           <div class="panel-right" v-if="portraitGraphData && portraitGraphData.nodes.length > 0">
             <h2 class="section-title">证据关系图</h2>
+            <p class="graph-node-hint">当前同步展示 {{ visibleNodeCountHint }} 条时间轴对应节点</p>
             <div class="portrait-graph-wrap">
               <EvidenceGraph
                 :data="portraitGraphData"
                 :loading="false"
                 :highlight-chain-id="highlightChainId"
+                :focus-node-id="graphFocusNodeId"
+                :hover-node-id="hoveredGraphNodeId"
                 :playback-index="-1"
-                :filter-type="filterType"
+                :filter-type="'all'"
                 @node-click="handleGraphNodeClick"
+                @node-hover="handleGraphNodeHover"
                 @chain-count="() => {}"
               />
             </div>
@@ -771,6 +770,12 @@ function handleClosePanel() {
   color: var(--app-text-secondary);
   margin: 6px 0 0;
   text-align: center;
+}
+.graph-node-hint {
+  margin: 0 0 8px;
+  text-align: right;
+  font-size: 12px;
+  color: var(--app-text-secondary);
 }
 .section-title {
   font-size: 18px;

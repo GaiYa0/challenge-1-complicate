@@ -10,9 +10,12 @@ import { defineStore } from 'pinia'
 import { enqueueAnalyzeJob, type AnalyzeJobKind } from '../../api/analyze'
 import {
   getFileAnomaly,
+  getFileCleanRows,
   getFilePreview,
   listDbFiles,
   type AnomalyData,
+  type CleanRowsData,
+  type CleanRowItem,
   type FileDetailItem,
   type PreviewData,
 } from '../../api/file'
@@ -64,6 +67,15 @@ export const useAnalysisStore = defineStore('analysis', () => {
 
   const summary = ref<AnalysisSummary>({ ...EMPTY_SUMMARY })
   const summaryLoading = ref(false)
+  const cleanRows = ref<CleanRowItem[]>([])
+  const cleanRowsLoading = ref(false)
+  const cleanRowsTotal = ref(0)
+  const cleanRowsMeta = ref<{
+    offset: number
+    limit: number
+    rowsBefore: number
+    rowsAfter: number
+  } | null>(null)
 
   const hasFiles = computed(() => files.value.length > 0)
 
@@ -191,6 +203,51 @@ export const useAnalysisStore = defineStore('analysis', () => {
     enqueuedTaskIds.value = []
     summary.value = { ...EMPTY_SUMMARY }
     summaryLoading.value = false
+    cleanRows.value = []
+    cleanRowsLoading.value = false
+    cleanRowsTotal.value = 0
+    cleanRowsMeta.value = null
+  }
+
+  async function loadCleanRows(
+    filename?: string,
+    params?: { offset?: number; limit?: number },
+  ): Promise<CleanRowsData> {
+    const name = filename ?? files.value.find((f) => !isDerivativeFilename(f)) ?? files.value[0]
+    if (!name) {
+      const empty: CleanRowsData = {
+        rows: [],
+        total: 0,
+        offset: params?.offset ?? 0,
+        limit: params?.limit ?? 200,
+        rows_before: 0,
+        rows_after: 0,
+      }
+      cleanRows.value = []
+      cleanRowsTotal.value = 0
+      cleanRowsMeta.value = {
+        offset: empty.offset,
+        limit: empty.limit,
+        rowsBefore: empty.rows_before,
+        rowsAfter: empty.rows_after,
+      }
+      return empty
+    }
+    cleanRowsLoading.value = true
+    try {
+      const data = await getFileCleanRows(name, params)
+      cleanRows.value = Array.isArray(data?.rows) ? data.rows : []
+      cleanRowsTotal.value = Number(data?.total ?? 0)
+      cleanRowsMeta.value = {
+        offset: Number(data?.offset ?? 0),
+        limit: Number(data?.limit ?? 200),
+        rowsBefore: Number(data?.rows_before ?? 0),
+        rowsAfter: Number(data?.rows_after ?? 0),
+      }
+      return data
+    } finally {
+      cleanRowsLoading.value = false
+    }
   }
 
   return {
@@ -201,10 +258,15 @@ export const useAnalysisStore = defineStore('analysis', () => {
     enqueuedTaskIds,
     summary,
     summaryLoading,
+    cleanRows,
+    cleanRowsLoading,
+    cleanRowsTotal,
+    cleanRowsMeta,
     hasFiles,
     fetchFiles,
     enqueueAllAnalyses,
     loadSummary,
+    loadCleanRows,
     applyCachedSummary,
     reset,
   }

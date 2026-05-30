@@ -40,7 +40,7 @@ def read_clean_dataframe(
         return pd.read_csv(BytesIO(raw)), row
 
     df_raw = read_user_csv_dataframe(db, minio, filename=row.filename, user_id=user_id)
-    df_clean, _ = standard_clean(df_raw)
+    df_clean, _ = standard_clean(db, df_raw, user_id=user_id, filename=row.filename)
     return df_clean, row
 
 

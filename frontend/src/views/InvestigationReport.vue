@@ -18,6 +18,7 @@ import { notifySuccess, notifyError } from '../utils/notify'
 import { formatDateTime } from '../utils/format'
 import { ACTION_TYPE_LABELS } from '../types/evidence'
 import type { ActionType } from '../types/evidence'
+import { generateReport, getReportTask } from '../api/reports'
 
 const route = useRoute()
 const caseStore = useCaseStore()
@@ -85,6 +86,7 @@ onMounted(() => void hydrateFromBackend())
 watch(caseId, (id, prev) => { if (id !== prev) void hydrateFromBackend() })
 
 const completing = ref(false)
+const exporting = ref(false)
 async function handleComplete() {
   completing.value = true
   try {
@@ -99,6 +101,50 @@ async function handleComplete() {
 
 function handlePrint() {
   window.print()
+}
+
+async function resolveReportPersonId(): Promise<string | null> {
+  const q = String(route.query.personId || '').trim()
+  if (q) return q
+  const top = clueStore.clueList[0]
+  if (!top?.id) return null
+  const detail = await clueStore.fetchDetail(top.id)
+  return detail?.person_id ? String(detail.person_id).trim() : null
+}
+
+async function pollReportTask(taskId: string, timeoutMs = 180000): Promise<string> {
+  const started = Date.now()
+  while (Date.now() - started < timeoutMs) {
+    const status = await getReportTask(taskId)
+    if (status.status === 'SUCCESS' && status.result?.download_url) {
+      return status.result.download_url
+    }
+    if (status.status === 'FAILURE') {
+      throw new Error(status.error || '导出失败')
+    }
+    await new Promise((resolve) => setTimeout(resolve, 1500))
+  }
+  throw new Error('导出超时，请稍后在任务页查看')
+}
+
+async function handleExport(format: 'pdf' | 'docx') {
+  exporting.value = true
+  try {
+    const personId = await resolveReportPersonId()
+    if (!personId) throw new Error('未找到可导出对象，请先生成人物线索')
+    const queued = await generateReport({
+      case_id: caseId.value,
+      person_id: personId,
+      format,
+    })
+    const url = await pollReportTask(queued.task_id)
+    window.open(url, '_blank', 'noopener')
+    notifySuccess(`已生成${format.toUpperCase()}报告`)
+  } catch (e) {
+    notifyError(e instanceof Error ? e.message : '导出失败')
+  } finally {
+    exporting.value = false
+  }
 }
 
 function categoryLabel(cat: string): string {
@@ -241,6 +287,8 @@ const hasAnyData = computed(() => Boolean(analysis.value || caseInfo.value))
 
     <div v-if="hasData" class="report-actions no-print">
       <el-button size="large" @click="handlePrint" :disabled="!hasAnyData">打印 / 导出 PDF</el-button>
+      <el-button size="large" :loading="exporting" :disabled="!hasAnyData" @click="handleExport('pdf')">正式导出 PDF</el-button>
+      <el-button size="large" :loading="exporting" :disabled="!hasAnyData" @click="handleExport('docx')">正式导出 Word</el-button>
       <el-button
         type="primary"
         size="large"

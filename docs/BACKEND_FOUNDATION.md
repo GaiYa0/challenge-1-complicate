@@ -200,4 +200,4 @@ flowchart LR
 
 ---
 
-*维护：表结构或契约变更时请同步更新本文与 `PLATFORM_ARCHITECTURE_REFACTOR.md`。*
+*维护：表结构或契约变更时请同步更新本文与 `SYSTEM_ARCHITECTURE.md`、`docs/README.md`。*

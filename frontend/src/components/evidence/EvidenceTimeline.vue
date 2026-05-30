@@ -13,13 +13,15 @@ import { ACTION_TYPE_LABELS } from '../../types/evidence'
 
 const props = defineProps<{
   entries: EvidenceChainEntry[]
-  filterType?: ActionType | 'all'
-  filterPerson?: string
+  activeActionId?: string | null
+  hoveredActionId?: string | null
 }>()
 
 const emit = defineEmits<{
   (e: 'select-evidence', ev: Evidence): void
   (e: 'select-person', personId: string): void
+  (e: 'entry-click', payload: { actionId: string }): void
+  (e: 'entry-hover', payload: { actionId: string | null }): void
 }>()
 
 const expandedEntries = ref<Set<string>>(new Set())
@@ -32,19 +34,7 @@ function toggleEntry(id: string) {
   }
 }
 
-const filteredEntries = computed(() => {
-  let list = props.entries
-  if (props.filterType && props.filterType !== 'all') {
-    list = list.filter((e) => e.action.type === props.filterType)
-  }
-  if (props.filterPerson) {
-    const p = props.filterPerson.toLowerCase()
-    list = list.filter((e) =>
-      e.relatedPersons.some((rp) => rp.name.toLowerCase().includes(p)),
-    )
-  }
-  return list
-})
+const timelineEntries = computed(() => props.entries)
 
 function formatTime(ts: string): string {
   if (!ts) return '--'
@@ -69,22 +59,31 @@ function statusClass(status: string): string {
 
 <template>
   <div class="evidence-timeline">
-    <div v-if="filteredEntries.length === 0" class="timeline-empty">
+    <div v-if="timelineEntries.length === 0" class="timeline-empty">
       <p>暂无证据链数据</p>
     </div>
     <div
-      v-for="entry in filteredEntries"
+      v-for="entry in timelineEntries"
       :key="entry.action.id"
       :id="`timeline-entry-${entry.action.id}`"
       class="timeline-item"
-      :class="{ 'timeline-item--expanded': expandedEntries.has(entry.action.id) }"
+      :class="{
+        'timeline-item--expanded': expandedEntries.has(entry.action.id),
+        'timeline-item--active': props.activeActionId === entry.action.id,
+        'timeline-item--hovered': props.hoveredActionId === entry.action.id,
+      }"
+      @mouseenter="emit('entry-hover', { actionId: entry.action.id })"
+      @mouseleave="emit('entry-hover', { actionId: null })"
     >
       <div class="timeline-dot" :class="`dot-${entry.action.type}`">
         <span class="dot-icon">{{ actionIcon(entry.action.type) }}</span>
       </div>
       <div class="timeline-connector" />
 
-      <div class="timeline-content" @click="toggleEntry(entry.action.id)">
+      <div
+        class="timeline-content"
+        @click="toggleEntry(entry.action.id); emit('entry-click', { actionId: entry.action.id })"
+      >
         <div class="timeline-header">
           <span class="timeline-time">{{ formatTime(entry.time) }}</span>
           <el-tag size="small" :type="entry.action.type === 'fund' ? 'danger' : entry.action.type === 'call' ? 'warning' : 'info'" effect="plain">
@@ -233,6 +232,14 @@ function statusClass(status: string): string {
 .timeline-item--expanded .timeline-content {
   border-color: var(--app-primary);
   box-shadow: 0 4px 16px rgba(0, 0, 0, 0.08);
+}
+.timeline-item--active .timeline-content {
+  border-color: #2563eb;
+  box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.22);
+}
+.timeline-item--hovered .timeline-content {
+  border-color: #60a5fa;
+  box-shadow: 0 0 0 2px rgba(96, 165, 250, 0.18);
 }
 .timeline-header {
   display: flex;

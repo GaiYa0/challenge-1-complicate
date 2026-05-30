@@ -93,4 +93,4 @@ frontend/src/
 
 ---
 
-*变更时请同步更新本文与 `PLATFORM_ARCHITECTURE_REFACTOR.md` 交叉引用。*
+*变更时请同步更新本文与 `SYSTEM_ARCHITECTURE.md` 及 `docs/README.md`。*

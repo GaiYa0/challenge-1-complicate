@@ -12,6 +12,7 @@ import { useAnalysisStore } from '../store/modules/analysis.store'
 import { useTaskPoller } from '../composables/useTaskPoller'
 import StepIndicator from '../components/investigation/StepIndicator.vue'
 import AnalysisProgress from '../components/investigation/AnalysisProgress.vue'
+import { getFieldLabel } from '../utils/fieldLabels'
 import { notifyError, notifySuccess } from '../utils/notify'
 
 const route = useRoute()
@@ -28,6 +29,12 @@ const footerRef = ref<HTMLDivElement | null>(null)
 
 type RowStatus = 'normal' | 'anomaly' | 'pending'
 
+const STATUS_ORDER: Record<string, number> = {
+  anomaly: 0,
+  pending: 1,
+  normal: 2,
+}
+
 interface CleanRow {
   index: number
   status: RowStatus
@@ -40,6 +47,9 @@ const cleanRows = ref<CleanRow[]>([])
 const remarkDialogVisible = ref(false)
 const currentRemarkRow = ref<CleanRow | null>(null)
 const remarkInput = ref('')
+const detailDialogVisible = ref(false)
+const currentDetailRow = ref<CleanRow | null>(null)
+const expandedRowKeys = ref<string[]>([])
 
 const progressMessages = [
   '正在校验数据格式...',
@@ -54,7 +64,7 @@ const { isPolling, progress, start: startPoll } = useTaskPoller({
   onAllComplete: async () => {
     await analysisStore.loadSummary()
     caseStore.saveAnalysis(caseId.value, { ...summary.value })
-    generateCleanRows()
+    await generateCleanRows()
     phase.value = 'done'
   },
 })
@@ -64,27 +74,61 @@ onMounted(async () => {
   const cached = caseStore.getAnalysis(caseId.value)
   if (cached) {
     analysisStore.applyCachedSummary(cached)
-    generateCleanRows()
     phase.value = 'done'
   }
   await analysisStore.fetchFiles(`case-${caseId.value}`)
+  if (phase.value === 'done') {
+    await generateCleanRows()
+  }
 })
 
 function generateCleanRows() {
-  const rows: CleanRow[] = []
-  const total = summary.value.dataOverview?.rows ?? 20
-  const anomalyCount = summary.value.anomalyCount ?? 0
-  for (let i = 0; i < Math.min(total, 200); i++) {
-    const isAnomaly = i < anomalyCount
-    rows.push({
-      index: i + 1,
-      status: isAnomaly ? 'anomaly' : i < anomalyCount + 5 ? 'pending' : 'normal',
-      markedEvidence: false,
-      remark: '',
-      data: { row: i + 1, field_1: `数据项 ${i + 1}`, field_2: isAnomaly ? '异常值' : '正常' },
-    })
+  return loadRealCleanRows()
+}
+
+async function loadRealCleanRows() {
+  const memo = new Map<number, { markedEvidence: boolean; remark: string }>()
+  for (const row of cleanRows.value) {
+    memo.set(row.index, { markedEvidence: row.markedEvidence, remark: row.remark })
   }
-  cleanRows.value = rows
+  const sourceName = files.value.find((f) => !f.startsWith('clean_') && !f.startsWith('feature_')) ?? files.value[0]
+  if (!sourceName) {
+    cleanRows.value = []
+    return
+  }
+  try {
+    const data = await analysisStore.loadCleanRows(sourceName, { offset: 0, limit: 200 })
+    cleanRows.value = (data.rows ?? [])
+      .map((r) => {
+        const old = memo.get(r.index)
+        return {
+          index: Number(r.index),
+          status: (r.status as RowStatus) ?? 'normal',
+          markedEvidence: old?.markedEvidence ?? false,
+          remark: old?.remark ?? '',
+          data: (r.data ?? {}) as Record<string, unknown>,
+        }
+      })
+      .sort((a, b) => {
+        const sa = STATUS_ORDER[a.status] ?? 99
+        const sb = STATUS_ORDER[b.status] ?? 99
+        if (sa !== sb) return sa - sb
+        return a.index - b.index
+      })
+    summary.value = {
+      ...summary.value,
+      cleanBefore: Number(data.rows_before ?? summary.value.cleanBefore ?? 0),
+      cleanAfter: Number(data.rows_after ?? summary.value.cleanAfter ?? 0),
+      dataOverview:
+        summary.value.dataOverview ??
+        (Number.isFinite(Number(data.total))
+          ? { rows: Number(data.total), cols: Number(Object.keys(cleanRows.value[0]?.data ?? {}).length) }
+          : null),
+    }
+  } catch (e) {
+    cleanRows.value = []
+    notifyError(e instanceof Error ? e.message : '加载清洗明细失败')
+  }
 }
 
 async function handleStartCleaning() {
@@ -125,6 +169,44 @@ function saveRemark() {
   remarkDialogVisible.value = false
 }
 
+function formatDetailValue(value: unknown): string {
+  if (value === null || value === undefined || value === '') return '-'
+  if (typeof value === 'object') {
+    try {
+      return JSON.stringify(value, null, 2)
+    } catch {
+      return String(value)
+    }
+  }
+  return String(value)
+}
+
+function openDetail(row: CleanRow) {
+  currentDetailRow.value = row
+  detailDialogVisible.value = true
+}
+
+function handleRowDblClick(row: CleanRow) {
+  const key = String(row.index)
+  expandedRowKeys.value = expandedRowKeys.value[0] === key ? [] : [key]
+}
+
+function handleExpandChange(row: CleanRow, expandedRows: CleanRow[]) {
+  if (!expandedRows.length) {
+    expandedRowKeys.value = []
+    return
+  }
+  const currentKey = String(row.index)
+  if (expandedRowKeys.value[0] !== currentKey) {
+    expandedRowKeys.value = [currentKey]
+  }
+}
+
+function closeDetail() {
+  detailDialogVisible.value = false
+  currentDetailRow.value = null
+}
+
 function scrollToBottom() {
   footerRef.value?.scrollIntoView({ behavior: 'smooth', block: 'center' })
 }
@@ -136,10 +218,25 @@ function goImport() {
   router.push(`/cases/${caseId.value}/import`)
 }
 
+function summarizeRowData(data: Record<string, unknown>): string {
+  const entries = Object.entries(data ?? {}).filter(([, v]) => v !== null && v !== undefined && `${v}` !== '')
+  if (!entries.length) return '（空记录）'
+  return entries
+    .slice(0, 2)
+    .map(([k, v]) => `${getFieldLabel(k)}: ${formatDetailValue(v)}`)
+    .join(' | ')
+}
+
 const anomalyRows = computed(() => cleanRows.value.filter((r) => r.status === 'anomaly'))
 const pendingRows = computed(() => cleanRows.value.filter((r) => r.status === 'pending'))
 const normalRows = computed(() => cleanRows.value.filter((r) => r.status === 'normal'))
 const evidenceRows = computed(() => cleanRows.value.filter((r) => r.markedEvidence))
+const detailEntries = computed(() =>
+  Object.entries(currentDetailRow.value?.data ?? {}).map(([key, value]) => ({
+    label: getFieldLabel(key),
+    value: formatDetailValue(value),
+  })),
+)
 
 function statusColor(s: RowStatus): string {
   if (s === 'anomaly') return '#dc2626'
@@ -212,12 +309,24 @@ function statusLabel(s: RowStatus): string {
       <div class="clean-table-wrap">
         <el-table
           :data="cleanRows"
+          row-key="index"
+          :expand-row-keys="expandedRowKeys"
           max-height="520"
           size="small"
           stripe
           border
-          :row-class-name="({ row }: { row: CleanRow }) => `row-${row.status}${row.markedEvidence ? ' row-evidence' : ''}`"
+          :row-class-name="({ row }: { row: CleanRow }) => `row-clickable row-${row.status}${row.markedEvidence ? ' row-evidence' : ''}`"
+          @row-dblclick="handleRowDblClick"
+          @expand-change="handleExpandChange"
         >
+          <el-table-column type="expand" width="40" align="center">
+            <template #default="{ row }">
+              <div class="inline-action-row">
+                <span class="inline-action-label">双击行后可在此执行操作</span>
+                <el-button type="primary" size="small" @click.stop="openDetail(row)">查看详情</el-button>
+              </div>
+            </template>
+          </el-table-column>
           <el-table-column label="序号" width="70" align="center">
             <template #default="{ row }">{{ row.index }}</template>
           </el-table-column>
@@ -235,7 +344,10 @@ function statusLabel(s: RowStatus): string {
           </el-table-column>
           <el-table-column label="数据内容" min-width="200">
             <template #default="{ row }">
-              <span>{{ row.data.field_1 }} - {{ row.data.field_2 }}</span>
+              <div class="detail-text">
+                <span>{{ summarizeRowData(row.data) }}</span>
+                <span class="detail-link-hint">双击展开操作</span>
+              </div>
             </template>
           </el-table-column>
           <el-table-column label="证据" width="90" align="center">
@@ -244,7 +356,8 @@ function statusLabel(s: RowStatus): string {
                 :type="row.markedEvidence ? 'warning' : 'default'"
                 size="small"
                 plain
-                @click="toggleEvidence(row)"
+                @click.stop="toggleEvidence(row)"
+                @dblclick.stop
               >
                 {{ row.markedEvidence ? '已标记' : '标记' }}
               </el-button>
@@ -256,7 +369,8 @@ function statusLabel(s: RowStatus): string {
                 :type="row.remark ? 'success' : 'default'"
                 size="small"
                 plain
-                @click="openRemark(row)"
+                @click.stop="openRemark(row)"
+                @dblclick.stop
               >
                 {{ row.remark ? '已备注' : '备注' }}
               </el-button>
@@ -282,6 +396,39 @@ function statusLabel(s: RowStatus): string {
       <template #footer>
         <el-button @click="remarkDialogVisible = false">取消</el-button>
         <el-button type="primary" @click="saveRemark">保存</el-button>
+      </template>
+    </el-dialog>
+
+    <el-dialog
+      v-model="detailDialogVisible"
+      title="数据项详情"
+      width="640px"
+      :close-on-click-modal="false"
+      @closed="closeDetail"
+    >
+      <template v-if="currentDetailRow">
+        <div class="detail-meta">
+          <el-tag effect="plain">序号 {{ currentDetailRow.index }}</el-tag>
+          <el-tag :color="statusColor(currentDetailRow.status)" effect="dark" style="border:none; color:#fff">
+            {{ statusLabel(currentDetailRow.status) }}
+          </el-tag>
+          <el-tag v-if="currentDetailRow.markedEvidence" type="warning" effect="plain">已标记证据</el-tag>
+          <el-tag v-if="currentDetailRow.remark" type="success" effect="plain">已备注</el-tag>
+        </div>
+        <div v-if="currentDetailRow.remark" class="detail-remark">
+          备注：{{ currentDetailRow.remark }}
+        </div>
+        <el-table :data="detailEntries" size="small" border stripe max-height="360">
+          <el-table-column prop="label" label="字段" min-width="180" />
+          <el-table-column prop="value" label="值" min-width="280">
+            <template #default="{ row }">
+              <pre class="detail-value">{{ row.value }}</pre>
+            </template>
+          </el-table-column>
+        </el-table>
+      </template>
+      <template #footer>
+        <el-button type="primary" @click="closeDetail">关闭</el-button>
       </template>
     </el-dialog>
   </div>
@@ -353,6 +500,67 @@ function statusLabel(s: RowStatus): string {
 }
 .clean-table-wrap {
   margin-bottom: 16px;
+}
+.detail-text {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  color: inherit;
+  text-align: left;
+  padding: 2px 0;
+}
+:deep(.el-table__expanded-cell) {
+  background: var(--app-bg-card);
+}
+.inline-action-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 6px 4px;
+}
+.inline-action-label {
+  font-size: 12px;
+  color: var(--app-text-secondary);
+}
+.detail-link-hint {
+  font-size: 12px;
+  color: var(--app-primary);
+  opacity: 0;
+  transition: opacity 0.16s ease;
+  white-space: nowrap;
+}
+.detail-text .detail-link-hint {
+  pointer-events: none;
+}
+:deep(.row-clickable) {
+  cursor: pointer;
+}
+:deep(.row-clickable:hover > td) {
+  background: color-mix(in srgb, var(--app-primary) 6%, transparent);
+}
+:deep(.row-clickable:hover .detail-link-hint) {
+  opacity: 1;
+}
+.detail-meta {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+.detail-remark {
+  font-size: 13px;
+  color: var(--app-text-secondary);
+  margin: 0 0 10px;
+}
+.detail-value {
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: inherit;
 }
 :deep(.row-anomaly) { background: rgba(220, 38, 38, 0.04) !important; }
 :deep(.row-pending) { background: rgba(202, 138, 4, 0.04) !important; }

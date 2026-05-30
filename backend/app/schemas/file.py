@@ -1,3 +1,5 @@
+from typing import Any
+
 from pydantic import BaseModel
 
 
@@ -47,3 +49,29 @@ class ColumnStats(BaseModel):
 
 class AnomalyData(BaseModel):
     anomaly_count: int
+
+
+class CleanRowItem(BaseModel):
+    index: int
+    status: str
+    data: dict[str, Any]
+
+
+class CleanRowsData(BaseModel):
+    rows: list[CleanRowItem]
+    total: int
+    offset: int
+    limit: int
+    rows_before: int
+    rows_after: int
+
+
+class FieldMappingConfirmIn(BaseModel):
+    filename: str
+    mapping: dict[str, str]
+
+
+class FieldMappingConfirmOut(BaseModel):
+    learned: bool
+    header_signature: str
+    mapping_size: int

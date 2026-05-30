@@ -32,43 +32,6 @@
 
 - **Docker**：Docker Engine 20+，且已安装 **Docker Compose V2**（`docker compose` 命令可用）
 - **（可选）本地前后端分离开发**：Node.js 20+、Python 3.10+、`pip` / `npm`
-- **Windows 一键运行**：安装 [Docker Desktop](https://www.docker.com/products/docker-desktop/) 后，使用下方「Windows 便携版」或 `ChallengeDemo.exe`
-
----
-
-## Windows 便携版（.exe）
-
-本仓库可将全栈打成 **Windows 便携 ZIP**（内含 `ChallengeDemo.exe` + Docker 构建所需源码）。exe **不内嵌**数据库与服务，而是通过本机 **Docker Desktop** 拉起与 macOS/Linux 相同的 Compose 栈，保证功能一致。
-
-| 方式 | 说明 |
-|------|------|
-| **GitHub Releases** | 在 [Releases](https://github.com/GaiYa0/challenge-1-complicate/releases) 直接下载 **`ChallengeDemo.exe`**，或下载完整便携包 `challenge-demo-windows-*.zip` |
-| **自行构建 exe** | 在 Windows 上于仓库根执行：`.\packaging\windows\build.ps1`（需 Python 3.10+），产物在 `dist\` |
-| **仅脚本（无 exe）** | `.\run\windows-start.ps1` / `.\run\windows-stop.ps1` |
-| **从 GitHub 克隆** | `git clone` 后安装 Docker Desktop，在项目根执行 `docker compose --env-file .env.dev up -d --build`，浏览器打开 <http://127.0.0.1:8080> |
-
-**CI 自动构建**：推送标签 `v*`（如 `v1.0.0`）、发布 GitHub Release，或手动运行 Actions 工作流 **windows-release**，会生成并上传上述 ZIP。
-
-详细说明见 [`packaging/windows/README-WINDOWS.txt`](packaging/windows/README-WINDOWS.txt)。
-
-### 推送到 GitHub 并发布 Windows 包
-
-```bash
-git init   # 若尚未初始化
-git add .
-git commit -m "Initial commit"
-git remote add origin https://github.com/<你的用户名>/<仓库名>.git
-git branch -M main
-git push -u origin main
-```
-
-发布 Windows 便携 ZIP（会出现在仓库 **Releases** 页）任选其一：
-
-1. **打标签（推荐）**：`git tag v1.0.0 && git push origin v1.0.0` → 自动创建 Release 并上传 ZIP
-2. **手动运行工作流**：**Actions** → **windows-release** → **Run workflow**（可填 `v1.0.0`，留空则生成 `windows-<编号>` 预发布）
-3. **仅下载构建物**：同上工作流完成后，在 Run 详情 **Artifacts** 中也可下载 ZIP
-
-> **说明**：单个 `.exe` 作为启动器，依赖本机 Docker 拉起的完整服务栈；无法把 PostgreSQL / Neo4j 等全部打进一个无需 Docker 的 exe（体积与许可也不现实）。若需完全离线单机包，需另行裁剪架构（如 SQLite + 内嵌 Redis），与当前生产栈不同。
 
 ---
 
@@ -111,7 +74,7 @@ docker compose down -v
 
 - **Docker 一键上线**：使用上述 **8080** 入口即可，无需再跑 `npm run dev`。`frontend/Dockerfile` 会以 `VITE_API_BASE_URL=/api` 构建，由容器内 Nginx（`frontend/docker/nginx-default.conf`）转发到 `backend:8000`。
 - **本地开发**：在 `frontend` 目录执行 `npm install` 与 `npm run dev`；默认 `frontend/.env.development` 使用 `VITE_API_BASE_URL=/api`，由 `vite.config.ts` 代理到本机 `127.0.0.1:8000`（须先启动后端）。若改为直连 `http://127.0.0.1:8000`，需后端 `DEBUG=true` 以启用 CORS（见 `backend/main.py`）。
-- **仅构建静态资源**：可执行 `./run/frontend-build.sh`；自行托管时配置与 `frontend/.env.production` 及 Nginx 示例一致。
+- **仅构建静态资源**：在 `frontend` 目录执行 `npm run build`；自行托管时配置与 `frontend/.env.production` 及 Nginx 示例一致。
 
 **Nginx 示例（静态站 + `/api` 反代）**：构建时使用 `VITE_API_BASE_URL=/api` 与 `VITE_WS_URL` 指向同源 WebSocket 路径（如 `/ws`，需 Nginx 配置 `Upgrade` 头）。示意：
 
@@ -156,8 +119,6 @@ chmod +x run/*.sh
 | `run/docker-up.sh` | 构建并后台启动 `docker compose` |
 | `run/docker-down.sh` | 停止 Compose 服务 |
 | `run/docker-logs.sh` | 跟踪后端日志（可传服务名，默认 `backend`） |
-| `run/frontend-dev.sh` | 安装依赖并启动 Vite 开发服务器 |
-| `run/frontend-build.sh` | 生产构建前端（可通过环境变量覆盖 API 地址） |
 | `run/run.sh` | 统一入口：`./run/run.sh help` 查看子命令 |
 
 其它运维脚本（Kafka topics、SQL 示例等）仍在 **`scripts/`**。
@@ -169,6 +130,16 @@ chmod +x run/*.sh
 1. 根据集群情况修改 `deploy/k8s/` 内镜像地址、域名、Secret 示例（如 `backend-secret.example.yaml`、`postgres-secret.example.yaml`）。
 2. 使用 `kubectl apply -k deploy/k8s/`（若使用 Kustomize）或按顺序 apply 清单。
 3. GitHub Actions 工作流 **k8s-ci-cd**：推送到 `main` / `master` 时构建并推送 **GHCR** 镜像，并在配置了 `KUBE_CONFIG`（base64 的 kubeconfig）与已存在的 `deployment/backend` 时执行滚动更新。详见 `.github/workflows/k8s-ci-cd.yml`。
+
+---
+
+## 文档导航
+
+- 文档入口：`docs/README.md`
+- 运行说明：本 `README.md` + `run/README.md`
+- 架构主线：`docs/SYSTEM_ARCHITECTURE.md`
+- 接口契约：`docs/API_CONTRACT.md`
+- 安全与合规：`docs/COMPLIANCE_SECURITY.md`
 
 ---
 
@@ -201,7 +172,7 @@ chmod +x run/*.sh
 ## 登录与演示账号
 
 - **`DEBUG=true`（如 `.env.dev`）**：应用启动时若数据库中**尚无**用户名为 `admin` 的记录，会自动创建 **`admin` / `admin`**、角色 `admin`。重启后端即可生效。
-- **查看已有账号**：在项目根执行 `./run/db-list-users.sh`（需已启动 `challenge-postgres` 容器）。
+- **查看已有账号**：请在数据库中直接查询 `users` 表。
 - **`DEBUG=false`（生产）**：不会自动建号，请自行在库中创建用户并禁用弱口令。
 
 ---

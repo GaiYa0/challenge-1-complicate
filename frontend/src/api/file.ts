@@ -36,6 +36,21 @@ export interface CleanData {
   after: number
 }
 
+export interface CleanRowItem {
+  index: number
+  status: 'normal' | 'pending' | 'anomaly' | string
+  data: Record<string, unknown>
+}
+
+export interface CleanRowsData {
+  rows: CleanRowItem[]
+  total: number
+  offset: number
+  limit: number
+  rows_before: number
+  rows_after: number
+}
+
 export type ColumnStats = {
   mean?: number | null
   max?: number | null
@@ -81,6 +96,18 @@ export function getFilePreview(filename: string): Promise<PreviewData> {
 
 export function getFileClean(filename: string): Promise<CleanData> {
   return http.get(`/clean/${enc(filename)}`) as Promise<CleanData>
+}
+
+export function getFileCleanRows(
+  filename: string,
+  params?: { offset?: number; limit?: number },
+): Promise<CleanRowsData> {
+  return http.get(`/clean/rows/${enc(filename)}`, {
+    params: {
+      offset: params?.offset ?? 0,
+      limit: params?.limit ?? 200,
+    },
+  }) as Promise<CleanRowsData>
 }
 
 export function getFileStats(filename: string): Promise<StatsMap> {
